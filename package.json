@@ -1,0 +1,17 @@
+{
+  "name": "declickbait-eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 gate: does transcript-fed title rewriting beat title-only by enough to justify the transcript cost?",
+  "scripts": {
+    "eval": "tsx run-eval.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

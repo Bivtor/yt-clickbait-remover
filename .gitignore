@@ -1,0 +1,5 @@
+claude/*
+claude/
+.env
+transcript-cache/
+node_modules/
