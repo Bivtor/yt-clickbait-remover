@@ -1,0 +1,292 @@
+▶  Brighter with Herbert — "JUST RECORDED: Elon Musk Interviewed by JP Morgan's Jamie Dimon"  [2aTfE_UM7sU]
+   A (title-only) : Elon Musk Interviewed by Jamie Dimon
+   words_1000: Elon Musk Interviewed by Jamie Dimon at JP Morgan
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate B adds the JP Morgan location detail which is confirmed by the transcript, making it more informative and accurate."
+   words_3000: Elon Musk Interviewed by Jamie Dimon at JP Morgan
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate B adds the JP Morgan location detail which is directly confirmed by the transcript, making it more informative without adding any hype."
+   half      : Elon Musk Discusses SpaceX Going Public with Jamie Dimon
+              ✗ title-only  faith 4.3→3.0 (-1.3)  "Candidate A introduces a specific claim about SpaceX going public that isn't confirmed in the transcript excerpt, while B accurately describes what the video is without overpromising."
+
+▶  The Hill — "'Total victory' over Iran war in 2 weeks says Trump amid talks with Netanyahu about ceasefire"  [7lfEVu9xqXQ]
+   A (title-only) : Trump discusses Iran strategy and ceasefire talks with Netanyahu
+   words_1000: Trump Claims Victory Over Iran Possible in Two Weeks
+              ✗ title-only  faith 4.3→3.0 (-1.3)  "Candidate A accurately covers both the Iran strategy discussion and Netanyahu call without overpromising or repeating the original's sensational framing."
+   words_3000: Trump Claims Iran Victory in Two Weeks, Discusses Ceasefire with Netanyahu
+              ✗ title-only  faith 4.3→4.0 (-0.3)  "Candidate A removes the sensational 'claims victory' framing while still conveying the key topics covered in the transcript."
+   half      : Trump Claims Iran Victory Possible Within Two Weeks Amid Netanyahu Ceasefire Talks
+              ✗ title-only  faith 4.3→5.0 (+0.7)  "Candidate B removes the sensationalist 'victory' framing while still conveying the key topics covered in the transcript."
+
+▶  CBS Evening News — "Breaking down Iran and Israel's flare-up as Trump insists peace talks are proceeding"  [U_le9ZRne-w]
+   A (title-only) : Iran and Israel tensions as Trump addresses peace talks
+   words_1000: Trump Urges Israel and Iran to Stop Attacks After Missile Exchange
+              ✓ context wins  faith 3.7→5.0 (+1.3)  "Candidate B accurately captures the specific events (missile exchange, Trump's response) described in the transcript, giving viewers a clear picture of the story's content."
+   words_3000: Trump Urges Israel and Iran to Stop Fighting After Attacks
+              ✓ context wins  faith 3.7→5.0 (+1.3)  "Candidate B more specifically conveys the key news event—Trump urging a halt to fighting after actual attacks—matching the transcript more precisely."
+   half      : Trump Urges Israel And Iran To Stop Fighting After Sunday Missile Exchanges
+              ✓ context wins  faith 3.7→5.0 (+1.3)  "Candidate A more specifically captures the key events (missile exchanges, Trump urging both sides to stop) making it more informative while remaining accurate and non-sensational."
+
+▶  Atlanta News First — "Oil up, stocks down over Iran escalation"  [I6uG3AmnYfM]
+   A (title-only) : Oil Up, Stocks Down Over Iran Escalation
+   words_1000: Oil Prices Rise, Stocks Fall on Iran Escalation
+              ✓ context wins  faith 4.3→4.0 (-0.3)  "Candidate A is slightly more descriptive and less headline-telegraphic than B, which is nearly identical to the original clickbait style."
+   words_3000: Israel-Iran Conflict Driving Oil Prices Up, Stocks Down
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate B adds the specific Israel-Iran context making it more informative while keeping a calm, factual tone."
+   half      : Oil Prices Rise, Stocks Fall On Iran Escalation
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate B uses clearer, more descriptive language while removing the terse headline style, making it more informative and less sensational."
+
+▶  NBC Montana — "Trump Iran talks moving forward, 'subject to ignorance or stupidity getting in its way'"  [ZzbJW6Ubf4I]
+   A (title-only) : Trump Iran Talks Moving Forward With Challenges Ahead
+   words_1000: Iran and Israel Halt Strikes; Trump Seeks Ceasefire Deal
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate B accurately reflects the transcript's focus on both Iran-Israel hostilities pausing and Trump's ceasefire diplomacy efforts."
+   words_3000: Iran-Israel Ceasefire Paused, Trump Pursues Peace Talks
+              ✓ context wins  faith 3.3→5.0 (+1.7)  "Candidate A more accurately reflects the transcript's content about the broken ceasefire and ongoing peace efforts between Iran and Israel."
+   half      : Iran and Israel Halt Strikes as Peace Negotiations Continue
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate B more accurately reflects the transcript content about both Iran-Israel ceasefire and ongoing peace negotiations, while being completely free of clickbait."
+
+▶  The Washington Examiner — "Here's why Iran's attacks on Israel didn't cross Trump's red lines"  [urqZ2jrIIQg]
+   A (title-only) : Iran's Attacks on Israel and Trump's Red Lines
+   words_1000: Trump Still Pursues Iran Deal After Weekend Strikes
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately reflects the transcript's focus on Trump continuing diplomacy despite the exchanges of strikes, while B retains the original's vague and slightly clickbaity framing."
+   words_3000: Trump Continues Iran Negotiations Despite Weekend Missile Strikes
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately reflects the transcript's focus on ongoing negotiations despite the strikes, while B essentially repeats the original clickbait framing."
+   half      : Trump Pursues Iran Deal Despite Weekend Missile Exchanges
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate B accurately reflects the transcript's focus on Trump pursuing a deal despite the missile exchanges, while being informative and free of sensationalism."
+
+▶  KCAU-TV Sioux City — "Iran And Israel Ceasefire Weakens Amid New Rounds Of Attack"  [NqEPLQLqaIo]
+   A (title-only) : Iran And Israel Ceasefire Weakens Amid New Attacks
+   words_1000: Israel And Iran Exchange Fire, Ceasefire Holds For Now
+              ✗ title-only  faith 4.0→3.0 (-1.0)  "Candidate A accurately reflects the fragile ceasefire situation without contradicting the transcript, while B's 'holds for now' conflicts with the ceasefire being broken."
+   words_3000: Israel And Iran Exchange Fire, Ceasefire Appears Fragile
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate B accurately reflects the transcript's key details—direct fire exchange and fragile ceasefire—while being calm and specific."
+   half      : Israel And Iran Exchange Fire, Straining Two-Month Ceasefire
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate A adds the specific detail about the two-month ceasefire and uses precise language ('exchange fire') that better reflects the transcript content."
+
+▶  The National Desk — "Trump: IRAN talks moving forward, 'subject to IGNORANCE or STUPIDITY getting in its way'"  [KoatP9vW5TE]
+   A (title-only) : Trump: Iran talks moving forward, with caveats
+   words_1000: Iran And Israel Halt Strikes As Trump Negotiates Ceasefire
+              ✓ context wins  faith 4.0→4.0 (+0.0)  "Candidate A more clearly conveys the key developments in the transcript—Israel and Iran halting strikes and ongoing diplomatic efforts—while remaining calm and informative."
+   words_3000: Trump Claims Iran Peace Talks Progressing Amid Ceasefire
+              ✓ context wins  faith 4.0→4.0 (+0.0)  "Candidate B is more informative by mentioning the ceasefire context while remaining calm and accurate to the transcript."
+   half      : Trump Says Iran Peace Talks Proceeding Despite Potential Obstacles
+              ✓ context wins  faith 4.0→4.0 (+0.0)  "Candidate B is more informative by specifying peace talks and the obstacle context while remaining equally calm and accurate."
+
+▶  Theo Von — "John Kiriakou | This Past Weekend w/ Theo Von #661"  [mq2VC8s15Yk]
+   A (title-only) : John Kiriakou | This Past Weekend with Theo Von #661
+   words_1000: John Kiriakou on CIA Whistleblowing and Presidential Pardon
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate A accurately reflects the transcript's key topics and is far more informative than the original episode title."
+   words_3000: John Kiriakou on CIA Work, Whistleblowing, and Politics
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate B tells viewers the actual topics discussed while A is just the original title reformatted."
+   half      : John Kiriakou Discusses CIA Career And Democratic Primary Politics
+              ✗ title-only  faith 4.0→3.0 (-1.0)  "Candidate A faithfully preserves the episode identity without introducing content claims not well-supported by the short excerpt, while B adds 'Democratic Primary Politics' which isn't evidenced in the transcript."
+
+▶  Mil Gear Explainer — "If shorter is better... why stop at 10.3""  [_P9QXedTPPQ]
+   A (title-only) : Why Shorter Rifles Stop at 10.3 Inches
+   words_1000: Evolution of the Navy Mark 18 rifle
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate B accurately reflects the transcript's focus on the historical development of the Mark 18 without teasing a non-answered question."
+   words_3000: Evolution of the Navy Mark 18 Rifle Platform
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately reflects the transcript's focus on the historical evolution of the Mark 18 platform without retaining the clickbait framing of the original title."
+   half      : Evolution Of The Mark 18 Rifle Design
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately reflects the transcript's focus on the Mark 18's iterative development history without reintroducing clickbait framing."
+
+▶  The New York Times — "Why Marines Are Racing to Master Drone Warfare"  [xGJgHXTeat0]
+   A (title-only) : Why Marines Are Learning Drone Warfare
+   words_1000: Marines Train for First-Person-View Drone Combat
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate A specifies FPV drones and training, which is precisely what the transcript covers, making it more informative and accurate than the vague B."
+   words_3000: How Marines Are Training to Use Attack Drones
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate A is more specific about the training aspect shown in the transcript and avoids the vague 'learning' phrasing."
+   half      : Marines Train on First-Person-View Attack Drones
+              ✓ context wins  faith 4.3→5.0 (+0.7)  "Candidate A specifies the exact technology covered (FPV attack drones) and the training context, making it far more informative and grounded in the transcript."
+
+▶  Clip Kings — "Turing Solves the Interview Before It Even Starts (Benedict Cumberbatch) | The Imitation Game"  [Agg1cwDoigM]  ⚠ no transcript
+   A (title-only) : Turing Prepares for the Interview - The Imitation Game
+
+▶  CNBC — "Inside Waymo's New Robotaxi — The Ojai"  [RQaW3iMue3M]
+   A (title-only) : Waymo's New Robotaxi: The Ojai
+   words_1000: Waymo's New Ojai Robotaxi: Lower Cost, More Sensors
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B conveys the key details from the transcript—cost reduction and sensor upgrades—giving viewers a clearer idea of what the video covers."
+   words_3000: Waymo's New Ojai Robotaxi: Cost and Design
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B adds 'Cost and Design' which tells viewers the actual focus of the video, making it more informative than A which is essentially the same as the original minus 'Inside'."
+   half      : Waymo's New Purpose-Built Robotaxi: The Ojai
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B adds 'purpose-built' which is a key detail from the transcript distinguishing the Ojai from retrofitted vehicles like the Jaguar I-PACE."
+
+▶  Hank Green — "Medical Research is Going SciFi"  [G0xl0oIjKB4]
+   A (title-only) : Medical Research Is Going Sci-Fi
+   words_1000: Gene Editing Therapy Shows Promise for Lowering Cholesterol
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately reflects the specific trial discussed in the transcript and gives viewers clear, concrete information about the video's content without hype."
+   words_3000: Gene Editing Trial Reduces Heart Disease Risk Factor
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately describes the specific gene editing trial discussed in the transcript while being informative and free of clickbait."
+   half      : Gene Editing Trial Reduces Heart Disease Risk Factor
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately reflects the specific gene editing trial discussed and tells viewers what the video is actually about, while A is essentially the same clickbait title."
+
+▶  MAFIA the GAME and Founders Fund — "Can Tech Legends Find the Liar? (Mafia Episode 1)"  [EDCwQe7P8T0]
+   A (title-only) : Tech Legends Play Mafia: Episode 1
+   words_1000: Tech Legends Play Mafia Game for Charity
+              ✗ title-only  faith 4.0→2.0 (-2.0)  "Candidate A accurately reflects the content without adding unsupported claims like 'for charity' that don't appear in the transcript."
+   words_3000: Tech Legends Play Mafia Party Game
+              ✓ context wins  faith 4.0→4.0 (+0.0)  "Candidate A slightly better by specifying it's a party game, giving viewers marginally more context about what they'll watch."
+   half      : Tech Legends Play Mafia Game
+              ✗ title-only  faith 4.0→4.0 (+0.0)  "Candidate B retains the episode number which is useful context for a series, making it slightly more informative."
+
+▶  JoHannes | Wingsuit — "Epic Wingsuit Flight Off Half Dome | Yosemite National Park"  [Ocwxd_xnFvE]  ⚠ no transcript
+   A (title-only) : Wingsuit Flight Off Half Dome, Yosemite
+
+▶  Mustard — "This Jet Changed Everything"  [YCD1j4L7j3s]
+   A (title-only) : This Jet's Historical Significance
+   words_1000: Boeing's Bet on the First Safe Jet Airliner
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately reflects the video's focus on Boeing's development of a reliable jet airliner in response to the Comet's failures, while being informative and free of hype."
+   words_3000: Boeing's 707 Jet Airliner Development and Testing
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately names the subject and context, giving viewers a clear sense of what the video covers without hype."
+   half      : Boeing's 707 Jet Airliner Solved The Comet's Fatal Design Flaws
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately names the aircraft and subject matter while clearly conveying what the video covers without any hype."
+
+▶  Red Bull Motorsports — "What Happened To 2-Strokes?"  [zn7uatQQfYw]
+   A (title-only) : What Happened To 2-Stroke Engines?
+   words_1000: Why Motocross Switched From Two-Strokes To Four-Strokes
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate B better captures the actual content of the video, which discusses the transition from two-strokes to four-strokes in motocross racing and the debate around that decision."
+   words_3000: Why Motocross Switched From Two-Strokes To Four-Strokes
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate A more accurately reflects the transcript's focus on the motocross industry's switch from two-strokes to four-strokes and provides more specific context for viewers."
+   half      : Why Motocross Switched From 2-Strokes To 4-Strokes
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate B accurately captures the video's core topic of the transition from 2-strokes to 4-strokes in motocross, which is what the transcript discusses."
+
+▶  NORTH 02 — "The Deadliest Weapon of the Ancient World"  [6sLozwbSlEs]
+   A (title-only) : The Deadliest Weapon of the Ancient World
+   words_1000: Testing Ancient Sling Weapon Against Ballistics Gel
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate B accurately describes the video's actual content—testing a sling against ballistics gel—while removing all clickbait hyperbole from the original title."
+   words_3000: Testing Ancient Sling Weapon Against Armor and Ballistics Gel
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately describes the video's actual content—testing a sling against armor and ballistics gel—without hyperbolic claims."
+   half      : Sling Weapon Tests Against Armor and Ballistics Gel
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate B accurately describes the video's actual content—sling testing against armor and ballistics gel—while removing the vague clickbait framing of the original."
+
+▶  Marcus House — "SpaceX Is Already Preparing Starship Flight 13!?"  [UHqg_-m0ou4]
+   A (title-only) : SpaceX Preparing for Starship Flight 13
+   words_1000: Starship Flight 13 Vehicles Begin Testing After Flight 12
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate A more precisely conveys that testing has begun and references the Flight 12 context, making it more informative and specific than B."
+   words_3000: SpaceX Prepares Starship Flight 13 Booster And Ship
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate A is more informative by specifying that both the booster and ship are being prepared, matching the transcript details about Booster 20 and Ship 40."
+   half      : SpaceX Prepares Starship Flight 13 Boosters and Engines
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate A is more specific about what preparation involves (boosters and engines), giving viewers clearer expectations of the content."
+
+▶  Action Picks — "Bourne Escapes the US Embassy | The Bourne Identity"  [vtA4w3yKfgQ]
+   A (title-only) : Bourne Escapes the US Embassy
+   words_1000: Bourne Meets Woman at US Embassy, Escapes to Paris
+              ✓ context wins  faith 3.3→3.0 (-0.3)  "Candidate A provides slightly more context about what happens in the scene without adding hype."
+   words_3000: The Bourne Identity: Embassy Scene and Bank Heist
+              ✗ title-only  faith 3.3→2.0 (-1.3)  "Candidate A accurately reflects the scene shown in the transcript without adding unsupported content like a 'bank heist' that doesn't appear in the excerpt."
+   half      : Bourne Evades Capture At US Embassy
+              ✗ title-only  faith 3.3→3.0 (-0.3)  "Both are nearly identical but A removes the added dramatic flair of 'Evades Capture' which isn't clearly supported by the short transcript excerpt."
+
+▶  Colin and Samir — "We need to talk about Backrooms"  [3BANOGc7kzI]
+   A (title-only) : We Need To Talk About Backrooms
+   words_1000: YouTube Creators' Films Break Box Office Records
+              ✓ context wins  faith 3.3→4.0 (+0.7)  "Candidate A accurately reflects the broader topic of YouTube creators succeeding in Hollywood while removing the vague clickbait framing of the original."
+   words_3000: YouTube Creators' Films Dominate Box Office
+              ✓ context wins  faith 3.3→5.0 (+1.7)  "Candidate A accurately reflects the broader conversation about YouTube creators succeeding in Hollywood while removing the vague clickbait framing of the original."
+   half      : YouTubers Dominate Box Office: Backrooms, Obsession, Iron Lung
+              ✓ context wins  faith 3.3→5.0 (+1.7)  "Candidate A accurately reflects the multi-creator Hollywood discussion and removes the vague clickbait framing of the original."
+
+▶  Matt Spears — "Exploring 100 Miles of Abandoned Railroad Camping & Fishing"  [DvgQ3jSgKls]
+   A (title-only) : Exploring 100 Miles of Abandoned Railroad Camping and Fishing
+   words_1000: Camping and Fishing on Abandoned Railroad Trestle
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate A removes the exaggerated '100 miles' claim not supported by the transcript and presents a calm, accurate description of the trip."
+   words_3000: Camping And Fishing On An Abandoned Railroad
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate A removes the unverified '100 miles' claim not supported by the transcript excerpt, making it more faithful and less clickbaity."
+   half      : Camping and Fishing on Abandoned Mountain Railroad
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate A accurately reflects the content without the unverified '100 miles' claim from the original, making it more faithful and less sensational."
+
+▶  CGP Grey — "Why Surrendering to Pirates Was Actually Genius"  [3YFeE1eDlD0]
+   A (title-only) : Why Surrendering to Pirates Was Practical
+   words_1000: How Pirates Used Intimidation and False Flags to Force Surrenders
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate B more accurately describes the actual content about pirate branding and intimidation tactics while being more informative about what viewers will learn."
+   words_3000: How Pirates Used Reputation to Force Surrenders
+              ✓ context wins  faith 4.0→5.0 (+1.0)  "Candidate A accurately captures the transcript's focus on pirate branding/reputation mechanics and is more informative about the actual content."
+   half      : How Pirates Used Disguise to Avoid Combat
+              ✗ title-only  faith 4.0→2.0 (-2.0)  "Candidate A accurately reflects the transcript's theme of ships surrendering to pirates due to the Jolly Roger's intimidation strategy, while B incorrectly implies disguise was the tactic used."
+
+▶  hickok45 — "Armed in 2026"  [GQ8_y2x16Yo]
+   A (title-only) : Armed In 2026
+   words_1000: Shooting Three Modern Firearms: 2026 Edition
+              ✗ title-only  faith 4.7→3.0 (-1.7)  "Candidate B faithfully preserves the series title format the creator uses, matching the transcript's explicit reference to the video's name."
+   words_3000: Hickok45 Reviews Three Firearms From 2026
+              ✓ context wins  faith 4.7→4.0 (-0.7)  "Candidate B better describes the video's content by clarifying it's a review of three firearms from 2026, giving viewers more context than the bare title."
+   half      : Hickok45 Reviews Three-Gun Setup: AR-15, Shotgun, Handgun
+              ✓ context wins  faith 4.7→3.0 (-1.7)  "Candidate A provides more informative content about what viewers will actually see while removing the vague clickbait framing, even if the specific guns aren't confirmed in the excerpt."
+
+▶  GQ — "Ex-CIA Officer Breaks Down Spy Movies"  [WRJzaHMj2IY]
+   A (title-only) : Ex-CIA Officer Analyzes Spy Movies
+   words_1000: Former CIA Officer Critiques Scenes From Spy Movies
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B is slightly more informative by specifying that specific scenes are critiqued, matching the transcript more precisely."
+   words_3000: Former CIA Officer Critiques Spy Movies
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "'Critiques' more accurately reflects the tone described in the transcript where the officer emphasizes criticism of spy movies, while 'analyzes' is more neutral."
+   half      : Former CIA Officer Critiques Accuracy in Spy Movies
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B more accurately captures that the officer is critiquing factual accuracy in spy movies, which is exactly what the transcript describes."
+
+▶  Paramount Plus — "Homefront"  [F96iPZGdeog]  ⚠ no transcript
+   A (title-only) : Homefront
+
+▶  Scripps News — "Trump demands Israel and Iran stand down as new hostilities threaten ceasefire"  [2XjyNezVbZ0]
+   A (title-only) : Trump Calls for Israel and Iran Ceasefire
+   words_1000: Trump Calls For Ceasefire As Iran And Israel Trade Strikes
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate A adds the key context that strikes were exchanged, making it more informative while remaining equally accurate and calm."
+   words_3000: Trump Calls for Ceasefire as Iran and Israel Trade Strikes
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate B includes the key context of Iran and Israel trading strikes, making it more informative while remaining accurate and non-sensational."
+   half      : Trump Calls for Ceasefire as Iran and Israel Trade Strikes
+              ✓ context wins  faith 4.7→5.0 (+0.3)  "Candidate A adds the key context that Iran and Israel were actively trading strikes, making it more informative than B."
+
+▶  WVFRM Podcast — "Apple Silicon Has Competition!"  [5WOfbrrmwYE]
+   A (title-only) : Apple Silicon Has Competition
+   words_1000: WVFRM Podcast Discusses Apple Silicon Competitors and Smartwatches
+              ✓ context wins  faith 2.3→2.0 (-0.3)  "Candidate A is more informative by mentioning multiple topics covered, while both score similarly on faithfulness given the transcript excerpt doesn't clearly confirm the main topics."
+   words_3000: Waveform Podcast Reviews Garmin Watch, Fitbit Air, and Fitness Trackers
+              ✗ title-only  faith 2.3→1.0 (-1.3)  "The transcript excerpt doesn't confirm either title well, but A at least retains the original topic while removing the exclamation mark hype, whereas B introduces specific products not mentioned in the excerpt."
+   half      : Waveform Podcast Reviews Garmin Watches and Fitness Trackers
+              ✗ title-only  faith 2.3→1.0 (-1.3)  "Candidate A introduces topics not supported by the transcript excerpt, while B at least reflects the stated theme of the original title with slightly reduced hype."
+
+▶  The Verge — "Casey Neistat's guide to posting every day | The Vergecast"  [CyY-mA_IV94]
+   A (title-only) : Casey Neistat's Guide to Daily Posting
+   words_1000: Casey Neistat On Daily Posting And Creator Life
+              = tie  faith 2.0→2.0 (+0.0)  "Both candidates reference Casey Neistat and daily posting, but the transcript excerpt doesn't actually cover Casey Neistat's advice at all, making both equally misleading yet similarly structured."
+   words_3000: Casey Neistat on Daily Content Creation and Audience Connection
+              ✓ context wins  faith 2.0→1.0 (-1.0)  "Both are unfaithful since the transcript is about the Vergecast going daily, not Casey Neistat, but B is slightly more descriptive if Neistat does appear later in the full video."
+   half      : Casey Neistat on Daily Posting and Creator Strategy
+              ✓ context wins  faith 2.0→3.0 (+1.0)  "Candidate A adds 'Creator Strategy' which better reflects the broader context of the Vergecast's new daily format discussion, making it slightly more informative than B's near-identical phrasing."
+
+▶  Hard Fork — "Is Google Doing Enough to Win the A.I. Race?"  [3OuXRxh3JNw]
+   A (title-only) : Is Google Doing Enough in AI Development?
+   words_1000: Google Announces AI Search Updates and Agentic Tools at I/O 2026
+              ✓ context wins  faith 3.0→5.0 (+2.0)  "Candidate A accurately names the event and specific topics covered, while B retains the vague rhetorical framing of the original clickbait."
+   words_3000: Google Announces Faster, Cheaper AI Models at IO
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate A reflects specific announcements from the transcript and removes the speculative framing, while B retains the vague rhetorical question structure of the original clickbait."
+   half      : Google Announces New AI Models and Agentic Search at I/O 2024
+              ✓ context wins  faith 3.0→3.0 (+0.0)  "Candidate A is more informative and specific about the actual content (new AI models, agentic search, I/O event) while removing clickbait framing."
+
+▶  Decoder with Nilay Patel — "Rivian's software chief thinks you don't need CarPlay or buttons | Decoder"  [HSW5xDh8dS0]
+   A (title-only) : Rivian's Software Chief on CarPlay and Physical Buttons
+   words_1000: Rivian's Software Chief On Voice Controls And The Volkswagen Joint Venture
+              ✓ context wins  faith 3.7→4.0 (+0.3)  "Candidate A better reflects the actual transcript topics discussed: voice controls and the Volkswagen joint venture, which are both explicitly covered in the excerpt."
+   words_3000: Rivian's Chief Software Officer on AI Assistants and Volkswagen Partnership
+              ✓ context wins  faith 3.7→4.0 (+0.3)  "Candidate B better captures the actual content discussed—AI voice assistants and the VW partnership—making it more informative about what viewers will actually get."
+   half      : Rivian's Software Chief on Voice Control and Platform Architecture
+              ✓ context wins  faith 3.7→4.0 (+0.3)  "Candidate B better reflects the actual transcript content about voice control and platform/architecture discussions, while both are equally calm replacements for the clickbait original."
+
+▶  All-In Podcast — "The IPO Comeback: Why Tech Giants Are Finally Going Public | All-In Liquidity IPO Panel"  [jLICvWE7w2Q]
+   A (title-only) : The IPO Comeback: Why Tech Giants Are Going Public
+   words_1000: Cerebras and Planet Labs CEOs Discuss Recent IPOs
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately names the specific companies and speakers featured in the transcript, giving viewers concrete information about what to expect."
+   words_3000: Cerebras and Planet Labs CEOs Discuss Recent IPOs
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B names the actual companies and speakers featured in the transcript, giving viewers concrete information about the video's content."
+   half      : Cerebras and Planet Labs Founders Discuss Recent IPOs
+              ✓ context wins  faith 3.0→4.0 (+1.0)  "Candidate B accurately names the specific companies and speakers featured in the transcript, giving viewers clear and honest expectations without hype."
+
+══════════════════════════════════════════════════════════════
+AGGREGATE  (30 scored, 3 skipped — no transcript)
+
+  words_1000  wins 25/30  net   70%  faith gain +0.44  ✅ justified
+  words_3000  wins 27/30  net   80%  faith gain +0.64  ✅ justified
+  half        wins 23/30  net   53%  faith gain +0.41  ✅ justified
+
+COST
+  Haiku rewrites (this run)       : $0.19606
+  Sonnet judge   (eval-only)      : $0.2508
+  Supadata transcript API         : ~$0.001–0.005 / video (not counted here)
+  Est. production cost per video  : ~$0.00163 LLM + transcript
+══════════════════════════════════════════════════════════════

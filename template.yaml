@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: De-Clickbait — DynamoDB title cache + SQS processing queue + resolver + worker Lambdas
+
+# API keys are read from SSM Parameter Store at deploy time.
+# Create them once before the first deploy:
+#   aws ssm put-parameter --name /de-clickbait/transcript-api-key  --value "YOUR_KEY" --type String
+#   aws ssm put-parameter --name /de-clickbait/anthropic-api-key   --value "sk-ant-..." --type String
+Parameters:
+  TranscriptApiKey:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /de-clickbait/transcript-api-key
+  AnthropicApiKey:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /de-clickbait/anthropic-api-key
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]   # Graviton2 — 20% cheaper, same perf for I/O-bound Node.js
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref TitlesTable
+        QUEUE_URL: !Ref ProcessingQueue
+
+# ── API Gateway (HTTP API) ──────────────────────────────────────────────────────
+# Defined explicitly so we can attach CORS config (content scripts run on
+# youtube.com origin, so the response must include CORS headers).
+Resources:
+  TitleApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - GET
+          - OPTIONS
+
+  # ── DynamoDB ──────────────────────────────────────────────────────────────────
+  TitlesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: de-clickbait-titles
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: videoId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: videoId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true   # items auto-expire after 90 days (set by worker)
+
+  # ── SQS (processing queue + dead-letter queue) ────────────────────────────────
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-dlq
+      MessageRetentionPeriod: 1209600   # 14 days — enough time to investigate failures
+
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-queue
+      # VisibilityTimeout must be >= worker Lambda timeout so a message isn't
+      # re-delivered while the worker is still processing it.
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 86400   # 1 day
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3   # 3 failures → DLQ for manual inspection
+
+  # ── Resolver Lambda ───────────────────────────────────────────────────────────
+  # Called by the Firefox extension on every feed load.
+  # Hit  → returns rewritten title immediately.
+  # Miss → marks "pending" in DynamoDB, enqueues videoId to SQS, returns null
+  #        (extension shows original title; next load will be a hit).
+  ResolverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: de-clickbait-resolver
+      CodeUri: src/resolver/
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 128
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TitlesTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref TitlesTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ProcessingQueue.QueueName
+      Events:
+        GetTitle:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TitleApi
+            Path: /title/{videoId}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Format: cjs
+        Minify: false
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+        External:
+          - "@aws-sdk/*"   # provided by the Lambda runtime — keeps bundle tiny
+
+  # ── Worker Lambda ─────────────────────────────────────────────────────────────
+  # Triggered by SQS. Fetches transcript via Supadata, rewrites with Haiku,
+  # writes the result to DynamoDB. BatchSize: 1 keeps things simple and
+  # avoids one slow video blocking others in the same batch.
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: de-clickbait-worker
+      CodeUri: src/worker/
+      Handler: index.handler
+      Timeout: 120   # transcript fetch + LLM call; well within SQS VisibilityTimeout
+      MemorySize: 256
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref TitlesTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt ProcessingQueue.QueueName
+      Environment:
+        Variables:
+          TRANSCRIPT_API_KEY: !Ref TranscriptApiKey
+          ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProcessingQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures   # only failed records return to queue
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Format: cjs
+        Minify: false
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+        External:
+          - "@aws-sdk/*"   # bundling @anthropic-ai/sdk (not in Lambda runtime)
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API base URL — paste this into the Firefox extension config
+    Value: !Sub "https://${TitleApi}.execute-api.${AWS::Region}.amazonaws.com"
+  TableName:
+    Value: !Ref TitlesTable
+  QueueUrl:
+    Value: !Ref ProcessingQueue
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue

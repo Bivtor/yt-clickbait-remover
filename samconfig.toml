@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "de-clickbait"
+resolve_s3 = true
+s3_prefix = "de-clickbait"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+
+[default.global.parameters]
+region = "us-west-1"

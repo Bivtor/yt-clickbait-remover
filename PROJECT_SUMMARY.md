@@ -54,7 +54,7 @@ The instinct that 21k is "not bad for an American/English audience consuming mos
 - **LLM: Claude Haiku 4.5 via the Batch API** (50% off, async worker makes batching free). ~$0.0006/video.
 - **Thumbnails: client-side, no S3.** Point the `<img>` at YouTube's auto-sampled frames `i.ytimg.com/vi/{id}/{1,2,3}.jpg` (avoid `0.jpg`/`hqdefault.jpg` = the creator's clickbait thumb). Exact-timestamp frames need storyboard parsing — optional, not v1.
 - **Bulletproofing:** AWS Budgets at 50/80/100% → email; a code-level monthly spend counter that trips a **kill switch** before the ceiling; CloudWatch alarms on transcript-provider outage (→ auto-failover + email), DLQ depth, LLM errors, and user-growth tiers; SQS DLQ; idempotent worker; extension **fails open** (backend down → original titles, YouTube never breaks).
-- **Extension features:** title swap (MutationObserver, SPA-aware), translate-all toggle, per-channel allow/blocklist (client-side, free), thumbnail toggle, donate tip-jar (covers hosting at best, not income).
+- **Extension features:** title swap (MutationObserver, SPA-aware), translate-all toggle, per-channel allow/blocklist (client-side, free), thumbnail toggle, donate tip-jar (covers hosting at best, not income), **report bad title** button (future: surfaces rewrite errors to a human review queue; most-reported rewrites get a manual fix + cache override; allows course-correction without model upgrade).
 
 ---
 
@@ -79,10 +79,24 @@ A runnable eval harness was built to answer exactly this:
 
 ---
 
+## Phase 0 eval — results (complete)
+
+Ran on 33 real YouTube videos (30 scored; 3 skipped — geo-blocked/no transcript). Tested three transcript levels on Haiku 4.5, judged blind by Sonnet 4.6:
+
+| Context level | Net win rate | Faithfulness gain | Verdict |
+|---|---|---|---|
+| words_1000 | 70% | +0.44 | ✅ justified |
+| **words_3000** | **80%** | **+0.64** | ✅ **best** |
+| half (~4000w cap) | 53% | +0.41 | ✅ but most hallucinations |
+
+**Decision: ship `words_3000` on Haiku 4.5 via Batch API.** The half-transcript level had more hallucinations (model picks up mid-video tangents, occasionally invents dates like "I/O 2024" on a 2026 video). Sonnet 4.6 is ~4× more expensive per video ($0.017 vs $0.004 for LLM alone) and cuts monthly video coverage from ~16k to ~6.8k — not worth it given words_3000 won the eval outright.
+
+**Date injection:** Add `Today's date: {ISO date}` to the system prompt so the model doesn't reach for stale training-data years. Wrong-year titles are a minor UX complaint (much less egregious than rampant clickbait) and the report-title button is the long-term correction path.
+
+---
+
 ## Where things stand / next steps
 
-1. **Decide it's net-new** — confirm no AI viewer-side de-clickbaiter has shipped (current evidence: none has).
-2. **Run the Phase 0 eval** — expand the dataset toward ~50 with *real* titles + their actual transcripts, then run it. This is an afternoon and it tells you whether transcripts are worth paying for *before* any backend exists.
-3. If transcripts justify their cost → build Phase 1 (extension + resolve + DynamoDB + SQS worker + paid transcript API + Haiku batch + monitoring).
-4. If title-only is close enough → ship a zero-transcript-cost v1 and revisit.
-5. Distribution when ready: Show HN + privacy/de-Google subreddits (they already run SponsorBlock/DeArrow). Lead with the pitch "DeArrow without the voting, works on every video instantly," and have a crisp privacy answer ready (only videoId + public metadata, no user identifiers).
+1. ✅ **Phase 0 eval complete.** Transcripts are justified; `words_3000` on Haiku 4.5 is the production config.
+2. **Build Phase 1** — browser extension (MutationObserver title swap + thumbnail swap) + backend (DynamoDB cache + SQS queue + Lambda worker + Supadata transcripts + Haiku Batch API + monitoring).
+3. Distribution when ready: Show HN + privacy/de-Google subreddits (they already run SponsorBlock/DeArrow). Lead with the pitch "DeArrow without the voting, works on every video instantly," and have a crisp privacy answer ready (only videoId + public metadata, no user identifiers).

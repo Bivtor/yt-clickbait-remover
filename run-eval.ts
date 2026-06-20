@@ -54,7 +54,10 @@ if (existsSync(envPath)) {
 
 const REWRITE_MODEL = "claude-haiku-4-5";
 const JUDGE_MODEL   = "claude-sonnet-4-6";
-const CONCURRENCY   = 3;
+const CONCURRENCY    = 1;
+const HALF_CAP_WORDS = 4000; // keeps token usage sane for long podcasts/interviews
+
+const TODAY = new Date().toISOString().split("T")[0]; // e.g. "2026-06-13"
 
 const PRICING: Record<string, { in: number; out: number }> = {
   "claude-haiku-4-5":  { in: 1,  out: 5  },
@@ -88,9 +91,10 @@ interface Condition {
 }
 
 interface RowResult {
-  row:       Row;
-  titleOnly: Condition;
-  levels:    Record<Level, Condition>;
+  row:              Row;
+  titleOnly:        Condition;
+  levels:           Record<Level, Condition>;
+  transcriptSkipped: boolean;
 }
 
 // ── prompts ──────────────────────────────────────────────────────────────────
@@ -104,8 +108,9 @@ Output ONLY the rewritten title, nothing else.`;
 
 const SYS_WITH_TRANSCRIPT = `\
 You de-clickbait YouTube titles. You have the original title, the channel name, and a transcript excerpt of what the video actually contains.
-Rewrite the title to state plainly and accurately what the video really delivers, based on the transcript.
+Today's date: ${TODAY}. Rewrite the title to state plainly and accurately what the video really delivers, based on the transcript.
 Rules: remove hype, curiosity gaps, ALL-CAPS, emoji, and any promise the content doesn't keep; prefer concrete specifics from the transcript; keep proper nouns; aim for ~6–8 words.
+If you include a year in the title, use ${TODAY.slice(0, 4)} unless the transcript explicitly refers to a past event.
 If the original title is already plain, accurate, and contains no clickbait, return it in Title Case (capitalize the first letter of each major word) without changing any of the words.
 Output ONLY the rewritten title, nothing else.`;
 
@@ -123,55 +128,100 @@ Pick the better overall replacement. If genuinely equivalent, answer "tie".
 Respond with ONLY this JSON, no prose, no code fences:
 {"a":{"faithfulness":0,"informativeness":0,"sensationalism_removed":0},"b":{"faithfulness":0,"informativeness":0,"sensationalism_removed":0},"winner":"A|B|tie","reason":"one short sentence"}`;
 
-// ── Anthropic call ───────────────────────────────────────────────────────────
+// ── Anthropic call (with 429 retry) ─────────────────────────────────────────
 
 async function llm(
   model: string, system: string, user: string, maxTokens: number,
 ): Promise<{ text: string; usage: Usage }> {
-  const msg = await client.messages.create({
-    model, max_tokens: maxTokens, system,
-    messages: [{ role: "user", content: user }],
-  });
-  const text = msg.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map(b => b.text).join("").trim();
-  return { text, usage: { input: msg.usage.input_tokens, output: msg.usage.output_tokens, model } };
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const msg = await client.messages.create({
+        model, max_tokens: maxTokens, system,
+        messages: [{ role: "user", content: user }],
+      });
+      const text = msg.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map(b => b.text).join("").trim();
+      return { text, usage: { input: msg.usage.input_tokens, output: msg.usage.output_tokens, model } };
+    } catch (e: any) {
+      if (e?.status === 429 && attempt < 5) {
+        const wait = (parseInt(e?.headers?.["retry-after"] ?? "15", 10) + 1) * 1000;
+        process.stdout.write(`  [rate-limit] waiting ${Math.round(wait / 1000)}s…\n`);
+        await new Promise(r => setTimeout(r, wait));
+      } else {
+        throw e;
+      }
+    }
+  }
 }
 
 // ── transcript fetch + cache ─────────────────────────────────────────────────
 
-// Supadata enforces 1 req/sec. This serializes concurrent cache-miss fetches.
-let nextSupadataSlot = 0;
-async function waitForSupadataSlot(): Promise<void> {
-  const now  = Date.now();
-  const wait = nextSupadataSlot - now;
-  nextSupadataSlot = Math.max(now, nextSupadataSlot) + 1000;
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-}
-
-async function fetchTranscript(videoId: string): Promise<string> {
+// TranscriptAPI allows 300 req/min — no serialization needed.
+// Returns null (instead of throwing) for videos that are unavailable or geo-blocked.
+// Retryable errors (408, 429, 503) are retried with exponential backoff.
+// Hard errors (401, 402, network) still throw so the run fails loudly.
+async function fetchTranscript(videoId: string): Promise<string | null> {
   const cacheDir  = join(HERE, "transcript-cache");
   const cachePath = join(cacheDir, `${videoId}.txt`);
   if (existsSync(cachePath)) {
     process.stdout.write(`  [cache] ${videoId}\n`);
     return readFileSync(cachePath, "utf8");
   }
-  await waitForSupadataSlot();
+
   process.stdout.write(`  [fetch] ${videoId} … `);
-  const resp = await fetch(
-    `https://api.supadata.ai/v1/youtube/transcript?videoId=${videoId}&text=true`,
-    { headers: { "x-api-key": process.env.SUPADATA_API_KEY ?? "" } },
-  );
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Supadata ${resp.status} for ${videoId}: ${body}`);
+
+  const RETRYABLE = new Set([408, 429, 503]);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) {
+      const wait = 2 ** attempt * 1000;
+      process.stdout.write(`  [retry ${attempt}] waiting ${wait / 1000}s…\n`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+
+    const resp = await fetch(
+      `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=text`,
+      { headers: { "Authorization": `Bearer ${process.env.TRANSCRIPT_API_KEY ?? ""}` } },
+    );
+
+    if (!resp.ok) {
+      if (RETRYABLE.has(resp.status) && attempt < 3) continue;
+      // Soft failures: geo-blocked, private, deleted, no captions
+      if (resp.status === 404 || resp.status === 400) {
+        const body = await resp.text().catch(() => "");
+        process.stdout.write(`skipped (${resp.status} ${body.slice(0, 80)})\n`);
+        return null;
+      }
+      const body = await resp.text().catch(() => "");
+      throw new Error(`TranscriptAPI ${resp.status} for ${videoId}: ${body}`);
+    }
+
+    // format=text returns plain text; guard against an accidental JSON envelope
+    const raw = await resp.text();
+    let text: string;
+    try {
+      const parsed = JSON.parse(raw) as any;
+      // If it came back as JSON array of segments, join the text fields
+      text = Array.isArray(parsed)
+        ? parsed.map((s: any) => s.text ?? "").join(" ")
+        : (parsed.text ?? parsed.content ?? raw);
+    } catch {
+      text = raw;
+    }
+
+    if (!text.trim()) {
+      process.stdout.write(`skipped (empty transcript)\n`);
+      return null;
+    }
+
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(cachePath, text);
+    process.stdout.write(`${text.split(/\s+/).length} words cached\n`);
+    return text;
   }
-  const data = await resp.json() as { content: string };
-  const text = typeof data.content === "string" ? data.content : JSON.stringify(data.content);
-  mkdirSync(cacheDir, { recursive: true });
-  writeFileSync(cachePath, text);
-  process.stdout.write(`${text.split(/\s+/).length} words cached\n`);
-  return text;
+
+  process.stdout.write(`skipped (all retries exhausted)\n`);
+  return null;
 }
 
 // ── transcript slicing ───────────────────────────────────────────────────────
@@ -185,7 +235,7 @@ function makelevels(full: string): Record<Level, string> {
   return {
     words_1000: sliceToWords(full, 1000),
     words_3000: sliceToWords(full, 3000),
-    half:       words.slice(0, Math.floor(words.length / 2)).join(" "),
+    half:       words.slice(0, Math.min(Math.floor(words.length / 2), HALF_CAP_WORDS)).join(" "),
   };
 }
 
@@ -228,17 +278,34 @@ async function judge(
 
 // ── core eval per row ────────────────────────────────────────────────────────
 
-async function evalRow(row: Row): Promise<RowResult> {
-  const full   = await fetchTranscript(row.videoId);
-  const slices = makelevels(full);
+const SKIPPED_CONDITION: Condition = {
+  rewrite: "(no transcript)", scores: { faithfulness: 0, informativeness: 0, sensationalism_removed: 0 },
+  winner: "tie", reason: "skipped — transcript unavailable", usage: [],
+};
 
-  // A — title only
+async function evalRow(row: Row): Promise<RowResult> {
+  const full = await fetchTranscript(row.videoId);
+
+  // A — title only (always runs, transcript or not)
   const a = await llm(
     REWRITE_MODEL, SYS_TITLE_ONLY,
     `Creator: ${row.creator}\nOriginal title: ${row.originalTitle}`,
     60,
   );
   const titleOnlyRewrite = a.text;
+
+  // If no transcript available, return title-only result and mark skipped
+  if (full === null) {
+    const nullScores: Scores = { faithfulness: 0, informativeness: 0, sensationalism_removed: 0 };
+    return {
+      row,
+      titleOnly: { rewrite: titleOnlyRewrite, scores: nullScores, winner: "tie", reason: "baseline", usage: [a.usage] },
+      levels: Object.fromEntries(LEVELS.map(lv => [lv, SKIPPED_CONDITION])) as Record<Level, Condition>,
+      transcriptSkipped: true,
+    };
+  }
+
+  const slices = makelevels(full);
 
   // accumulate title-only scores across all judge calls; we'll average them
   const toScoresSets: Scores[] = [];
@@ -261,7 +328,6 @@ async function evalRow(row: Row): Promise<RowResult> {
     levelConditions[lv] = { rewrite: contextRewrite, scores: scoresContext, winner, reason, usage: [b.usage, judgeUsage] };
   }
 
-  // average title-only scores across judges
   const avgTitleOnlyScores: Scores = {
     faithfulness:           toScoresSets.reduce((s, x) => s + x.faithfulness,           0) / toScoresSets.length,
     informativeness:        toScoresSets.reduce((s, x) => s + x.informativeness,        0) / toScoresSets.length,
@@ -272,6 +338,7 @@ async function evalRow(row: Row): Promise<RowResult> {
     row,
     titleOnly: { rewrite: titleOnlyRewrite, scores: avgTitleOnlyScores, winner: "tie", reason: "baseline", usage: [a.usage] },
     levels: levelConditions,
+    transcriptSkipped: false,
   };
 }
 
@@ -314,30 +381,34 @@ async function main() {
   const results = await mapLimit(rows, CONCURRENCY, evalRow);
 
   // ── per-item output ────────────────────────────────────────────────────────
+  const skipped = results.filter(r => r.transcriptSkipped);
   for (const r of results) {
-    console.log(`\n▶  ${r.row.creator} — "${r.row.originalTitle}"  [${r.row.videoId}]`);
+    console.log(`\n▶  ${r.row.creator} — "${r.row.originalTitle}"  [${r.row.videoId}]${r.transcriptSkipped ? "  ⚠ no transcript" : ""}`);
     console.log(`   A (title-only) : ${r.titleOnly.rewrite}`);
-    for (const lv of LEVELS) {
-      const c = r.levels[lv];
-      const mark = c.winner === "context" ? "✓ context wins" : c.winner === "title_only" ? "✗ title-only" : "= tie";
-      const fg = (c.scores?.faithfulness ?? 0) - (r.titleOnly.scores?.faithfulness ?? 0);
-      console.log(`   ${lv.padEnd(10)}: ${c.rewrite}`);
-      console.log(`              ${mark}  faith ${r.titleOnly.scores?.faithfulness.toFixed(1)}→${c.scores?.faithfulness.toFixed(1)} (${fg >= 0 ? "+" : ""}${fg.toFixed(1)})  "${c.reason}"`);
+    if (!r.transcriptSkipped) {
+      for (const lv of LEVELS) {
+        const c = r.levels[lv];
+        const mark = c.winner === "context" ? "✓ context wins" : c.winner === "title_only" ? "✗ title-only" : "= tie";
+        const fg = (c.scores?.faithfulness ?? 0) - (r.titleOnly.scores?.faithfulness ?? 0);
+        console.log(`   ${lv.padEnd(10)}: ${c.rewrite}`);
+        console.log(`              ${mark}  faith ${r.titleOnly.scores?.faithfulness.toFixed(1)}→${c.scores?.faithfulness.toFixed(1)} (${fg >= 0 ? "+" : ""}${fg.toFixed(1)})  "${c.reason}"`);
+      }
     }
   }
 
-  // ── aggregate ──────────────────────────────────────────────────────────────
-  const n = results.length;
-  const toFaithAll = results.map(r => r.titleOnly.scores?.faithfulness ?? 0);
+  // ── aggregate (skipped rows excluded) ─────────────────────────────────────
+  const scored = results.filter(r => !r.transcriptSkipped);
+  const n = scored.length;
+  const toFaithAll = scored.map(r => r.titleOnly.scores?.faithfulness ?? 0);
 
   console.log("\n══════════════════════════════════════════════════════════════");
-  console.log("AGGREGATE\n");
+  console.log(`AGGREGATE  (${n} scored, ${skipped.length} skipped — no transcript)\n`);
 
   for (const lv of LEVELS) {
-    const wins    = results.filter(r => r.levels[lv].winner === "context").length;
-    const losses  = results.filter(r => r.levels[lv].winner === "title_only").length;
+    const wins    = scored.filter(r => r.levels[lv].winner === "context").length;
+    const losses  = scored.filter(r => r.levels[lv].winner === "title_only").length;
     const netRate = (wins - losses) / n;
-    const faithContext   = results.map(r => r.levels[lv].scores?.faithfulness ?? 0);
+    const faithContext   = scored.map(r => r.levels[lv].scores?.faithfulness ?? 0);
     const faithGain      = mean(faithContext) - mean(toFaithAll);
     const justified = netRate >= VERDICT.minNetWinRate && faithGain >= VERDICT.minFaithfulnessGain;
     console.log(`  ${lv.padEnd(10)}  wins ${wins}/${n}  net ${(netRate * 100).toFixed(0).padStart(4)}%  faith gain ${faithGain >= 0 ? "+" : ""}${faithGain.toFixed(2)}  ${justified ? "✅ justified" : "⚠️  not yet"}`);
@@ -351,7 +422,7 @@ async function main() {
   console.log("\nCOST");
   console.log(`  Haiku rewrites (this run)       : $${rewriteCost.toFixed(5)}`);
   console.log(`  Sonnet judge   (eval-only)      : $${judgeCost.toFixed(4)}`);
-  console.log(`  Supadata transcript API         : ~$0.001–0.005 / video (not counted here)`);
+  console.log(`  TranscriptAPI                   : ~$0.001–0.002 / video (not counted here)`);
   console.log(`  Est. production cost per video  : ~$${(rewriteCost / n / (LEVELS.length + 1)).toFixed(5)} LLM + transcript`);
   console.log("══════════════════════════════════════════════════════════════\n");
 }

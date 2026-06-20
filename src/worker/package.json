@@ -1,0 +1,14 @@
+{
+  "name": "de-clickbait-worker",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

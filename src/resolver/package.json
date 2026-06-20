@@ -1,0 +1,14 @@
+{
+  "name": "de-clickbait-resolver",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-sqs": "^3.600.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

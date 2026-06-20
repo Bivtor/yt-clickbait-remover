@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: "De-Clickbait \u2014 DynamoDB title cache + SQS processing queue + resolver\
+  \ + worker Lambdas"
+Parameters:
+  TranscriptApiKey:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /de-clickbait/transcript-api-key
+  AnthropicApiKey:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /de-clickbait/anthropic-api-key
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures:
+    - arm64
+    Environment:
+      Variables:
+        TABLE_NAME:
+          Ref: TitlesTable
+        QUEUE_URL:
+          Ref: ProcessingQueue
+Resources:
+  TitleApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+        - '*'
+        AllowHeaders:
+        - content-type
+        AllowMethods:
+        - GET
+        - OPTIONS
+  TitlesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: de-clickbait-titles
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: videoId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: videoId
+        KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-dlq
+      MessageRetentionPeriod: 1209600
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-queue
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+          - DeadLetterQueue
+          - Arn
+        maxReceiveCount: 3
+  ResolverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: de-clickbait-resolver
+      CodeUri: ResolverFunction
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 128
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: TitlesTable
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: TitlesTable
+      - SQSSendMessagePolicy:
+          QueueName:
+            Fn::GetAtt:
+            - ProcessingQueue
+            - QueueName
+      Events:
+        GetTitle:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: TitleApi
+            Path: /title/{videoId}
+            Method: GET
+      Environment:
+        Variables:
+          NODE_OPTIONS: ' --enable-source-maps'
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+        - index.ts
+        External:
+        - '@aws-sdk/*'
+        Format: cjs
+        Minify: false
+        Sourcemap: true
+        Target: es2022
+      SamResourceId: ResolverFunction
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: de-clickbait-worker
+      CodeUri: WorkerFunction
+      Handler: index.handler
+      Timeout: 120
+      MemorySize: 256
+      Policies:
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: TitlesTable
+      - SQSPollerPolicy:
+          QueueName:
+            Fn::GetAtt:
+            - ProcessingQueue
+            - QueueName
+      Environment:
+        Variables:
+          TRANSCRIPT_API_KEY:
+            Ref: TranscriptApiKey
+          ANTHROPIC_API_KEY:
+            Ref: AnthropicApiKey
+          NODE_OPTIONS: ' --enable-source-maps'
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - ProcessingQueue
+              - Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+            - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+        - index.ts
+        External:
+        - '@aws-sdk/*'
+        Format: cjs
+        Minify: false
+        Sourcemap: true
+        Target: es2022
+      SamResourceId: WorkerFunction
+Outputs:
+  ApiEndpoint:
+    Description: "HTTP API base URL \u2014 paste this into the Firefox extension config"
+    Value:
+      Fn::Sub: https://${TitleApi}.execute-api.${AWS::Region}.amazonaws.com
+  TableName:
+    Value:
+      Ref: TitlesTable
+  QueueUrl:
+    Value:
+      Ref: ProcessingQueue
+  DeadLetterQueueUrl:
+    Value:
+      Ref: DeadLetterQueue
