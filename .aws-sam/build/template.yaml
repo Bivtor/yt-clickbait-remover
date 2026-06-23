@@ -31,6 +31,7 @@ Resources:
         - content-type
         AllowMethods:
         - GET
+        - POST
         - OPTIONS
   TitlesTable:
     Type: AWS::DynamoDB::Table
@@ -91,6 +92,13 @@ Resources:
               Ref: TitleApi
             Path: /title/{videoId}
             Method: GET
+        PostTitles:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: TitleApi
+            Path: /titles
+            Method: POST
       Environment:
         Variables:
           NODE_OPTIONS: ' --enable-source-maps'

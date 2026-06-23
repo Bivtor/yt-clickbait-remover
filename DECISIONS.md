@@ -22,6 +22,8 @@
 
 **Report title button (future feature).** The extension will include a "report bad title" button that surfaces rewrite errors to a human review queue. Most-reported titles get a manual cache override. This is the correction path for edge cases without requiring a model upgrade.
 
+**Hide Shorts option (future extension setting).** YouTube Shorts are excluded from title/thumbnail replacement (they use `/shorts/` URLs and different card components, not worth processing). A planned extension settings page will add a toggle to remove Shorts cards from the feed entirely — not just skip them, but hide them — for users who want a Shorts-free experience.
+
 ## Production config
 
 ```

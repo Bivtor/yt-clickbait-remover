@@ -26,11 +26,89 @@ var import_client_dynamodb = require("@aws-sdk/client-dynamodb");
 var import_client_sqs = require("@aws-sdk/client-sqs");
 var ddb = new import_client_dynamodb.DynamoDBClient({});
 var sqs = new import_client_sqs.SQSClient({});
+var TABLE = process.env.TABLE_NAME;
+var QUEUE = process.env.QUEUE_URL;
 var HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*"
 };
-var handler = async (event) => {
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+async function handleBatch(event) {
+  let videos;
+  try {
+    videos = JSON.parse(event.body ?? "{}").videos ?? [];
+  } catch {
+    return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "invalid JSON body" }) };
+  }
+  if (!videos.length) {
+    return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "videos array required" }) };
+  }
+  const results = {};
+  const trueMisses = [];
+  for (const batch of chunk(videos, 100)) {
+    const res = await ddb.send(new import_client_dynamodb.BatchGetItemCommand({
+      RequestItems: { [TABLE]: { Keys: batch.map((v) => ({ videoId: { S: v.videoId } })) } }
+    }));
+    const found = /* @__PURE__ */ new Set();
+    for (const item of res.Responses?.[TABLE] ?? []) {
+      const videoId = item.videoId.S;
+      found.add(videoId);
+      if (item.rewrittenTitle?.S) {
+        results[videoId] = { rewrittenTitle: item.rewrittenTitle.S, status: "hit" };
+      } else {
+        results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending" };
+      }
+    }
+    for (const v of batch) {
+      if (!found.has(v.videoId)) {
+        trueMisses.push(v);
+        results[v.videoId] = { rewrittenTitle: null, status: "pending" };
+      }
+    }
+  }
+  if (trueMisses.length) {
+    const unique = [...new Map(trueMisses.map((v) => [v.videoId, v])).values()];
+    Promise.all(
+      chunk(unique, 25).map(
+        (batch) => ddb.send(new import_client_dynamodb.BatchWriteItemCommand({
+          RequestItems: {
+            [TABLE]: batch.map((v) => ({
+              PutRequest: {
+                Item: {
+                  videoId: { S: v.videoId },
+                  status: { S: "pending" },
+                  originalTitle: { S: v.title },
+                  creator: { S: v.creator },
+                  enqueuedAt: { N: String(Date.now()) }
+                }
+              }
+            }))
+          }
+        })).catch(() => {
+        })
+        // items may already exist; ignore
+      )
+    );
+    Promise.all(
+      chunk(unique, 10).map(
+        (batch, batchIdx) => sqs.send(new import_client_sqs.SendMessageBatchCommand({
+          QueueUrl: QUEUE,
+          Entries: batch.map((v, i) => ({
+            Id: String(batchIdx * 10 + i),
+            MessageBody: JSON.stringify({ videoId: v.videoId, originalTitle: v.title, creator: v.creator })
+          }))
+        })).catch(() => {
+        })
+      )
+    );
+  }
+  return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ results }) };
+}
+async function handleSingle(event) {
   const videoId = event.pathParameters?.videoId;
   if (!videoId) {
     return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "videoId required" }) };
@@ -39,27 +117,19 @@ var handler = async (event) => {
   const originalTitle = params.title ? decodeURIComponent(params.title) : void 0;
   const creator = params.creator ? decodeURIComponent(params.creator) : void 0;
   const { Item } = await ddb.send(new import_client_dynamodb.GetItemCommand({
-    TableName: process.env.TABLE_NAME,
+    TableName: TABLE,
     Key: { videoId: { S: videoId } }
   }));
   if (Item?.rewrittenTitle?.S) {
-    return {
-      statusCode: 200,
-      headers: HEADERS,
-      body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit" })
-    };
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit" }) };
   }
   if (Item?.status?.S === "pending") {
-    return {
-      statusCode: 200,
-      headers: HEADERS,
-      body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" })
-    };
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" }) };
   }
   if (originalTitle && creator) {
     try {
       await ddb.send(new import_client_dynamodb.PutItemCommand({
-        TableName: process.env.TABLE_NAME,
+        TableName: TABLE,
         Item: {
           videoId: { S: videoId },
           status: { S: "pending" },
@@ -70,18 +140,18 @@ var handler = async (event) => {
         ConditionExpression: "attribute_not_exists(videoId)"
       }));
       await sqs.send(new import_client_sqs.SendMessageCommand({
-        QueueUrl: process.env.QUEUE_URL,
+        QueueUrl: QUEUE,
         MessageBody: JSON.stringify({ videoId, originalTitle, creator })
       }));
     } catch (err) {
       if (err.name !== "ConditionalCheckFailedException") throw err;
     }
   }
-  return {
-    statusCode: 200,
-    headers: HEADERS,
-    body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" })
-  };
+  return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" }) };
+}
+var handler = async (event) => {
+  if (event.requestContext.http.method === "POST") return handleBatch(event);
+  return handleSingle(event);
 };
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
