@@ -6,11 +6,11 @@
 
 ## Eval results
 
-| Context | Net win rate | Faithfulness gain | Call |
-|---|---|---|---|
-| words_1000 | 70% | +0.44 | ✅ justified |
-| **words_3000** | **80%** | **+0.64** | ✅ **winner** |
-| half (~4000w cap) | 53% | +0.41 | ✅ but most hallucinations |
+| Context           | Net win rate | Faithfulness gain | Call                       |
+| ----------------- | ------------ | ----------------- | -------------------------- |
+| words_1000        | 70%          | +0.44             | ✅ justified               |
+| **words_3000**    | **80%**      | **+0.64**         | ✅ **winner**              |
+| half (~4000w cap) | 53%          | +0.41             | ✅ but most hallucinations |
 
 ## Decisions
 
@@ -37,5 +37,28 @@ Videos at $150/mo   : ~28,000 (after ~$0 transcript amortized across users)
 ## What's next
 
 Build Phase 1:
+
 1. **Backend** — DynamoDB (cache) + SQS (queue) + Lambda worker (transcript → rewrite → cache write) + API Gateway (lookup endpoint)
 2. **Extension** — Firefox Manifest V3, MutationObserver title/thumbnail swap, hits the API on feed load
+
+┌─────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Question │ Answer │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Does the gate work proxy-only? │ ✅ Yes — no PO token needed, if you use the android player client │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Default/web clients? │ ❌ Walled by SABR (needs PO token). android bypasses it │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Can the segment come over direct AWS │ ❌ No — URLs are IP-locked (ip= baked in) to the gate's exit IP │
+│ IP (your §7 best case)? │ │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ So segment must go through proxy on │ ✅ Yes — requires a sticky session (rotating endpoint breaks it) │
+│ the same IP? │ │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Can ffmpeg range-fetch through the │ ❌ Not on the homebrew build (EOF) — curl/yt-dlp can │
+│ proxy? │ │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Working path │ yt-dlp downloads via sticky proxy → ffmpeg on the local file │
+├────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Cost reality │ android only exposes itag 18 (360p progressive) → whole-file pull (~11MB/3.5min). Scales with │
+│ │ length — the §5 "0.5MB" assumption is dead unless we add partial-fetch │
+└────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘

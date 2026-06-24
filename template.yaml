@@ -6,6 +6,7 @@ Description: De-Clickbait — DynamoDB title cache + SQS processing queue + reso
 # Create them once before the first deploy:
 #   aws ssm put-parameter --name /de-clickbait/transcript-api-key  --value "YOUR_KEY" --type String
 #   aws ssm put-parameter --name /de-clickbait/anthropic-api-key   --value "sk-ant-..." --type String
+#   aws ssm put-parameter --name /de-clickbait/proxy-url           --value "http://user-NAME:PASS@gate.decodo.com:7000" --type String
 Parameters:
   TranscriptApiKey:
     Type: AWS::SSM::Parameter::Value<String>
@@ -13,11 +14,18 @@ Parameters:
   AnthropicApiKey:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /de-clickbait/anthropic-api-key
+  # Residential proxy URL for the thumbnail worker's yt-dlp gate calls.
+  # Read from SSM (kept out of git + CLI history); create it before first deploy
+  # (see header). Decodo format: http://user-<name>:<pass>@gate.decodo.com:7000
+  ProxyUrl:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /de-clickbait/proxy-url
 
 Globals:
   Function:
-    Runtime: nodejs22.x
-    Architectures: [arm64]   # Graviton2 — 20% cheaper, same perf for I/O-bound Node.js
+    # NOTE: Runtime is set per-function (NOT here) because the thumbnail worker is
+    # a container Image package, which cannot carry a Runtime property.
+    Architectures: [arm64]   # Graviton2 — 20% cheaper; static-ffmpeg + base image are multi-arch
     Environment:
       Variables:
         TABLE_NAME: !Ref TitlesTable
@@ -54,7 +62,77 @@ Resources:
           KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: ttl
-        Enabled: true   # items auto-expire after 90 days (set by worker)
+        Enabled: true   # items auto-expire after 180 days (set by worker); matches S3 lifecycle
+
+  # ── S3 (extracted thumbnail frames) ───────────────────────────────────────────
+  # Worker extracts a frame at an arbitrary timestamp, encodes to ~40KB JPEG,
+  # and stores it here as <videoId>.jpg. DynamoDB item carries the resulting URL.
+  # Lifecycle expiration matches the DynamoDB TTL (180d) so the two caches stay
+  # in sync — a frame never goes stale, expiry only bounds storage + drops
+  # deleted/privated videos.
+  ThumbnailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "de-clickbait-thumbs-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-frames-180d
+            Status: Enabled
+            ExpirationInDays: 180
+
+  # ── CloudFront serving layer (thumbnail CDN) ──────────────────────────────────
+  # The bucket stays PRIVATE; CloudFront reads it via Origin Access Control (OAC).
+  # Browser <img> loads the frame from the CDN domain (edge-cached, cheaper egress
+  # than serving S3 directly). The worker writes this domain into thumbUrl.
+  # NOTE: first deploy of the distribution takes ~15-20 min to propagate.
+  ThumbnailOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: de-clickbait-thumb-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ThumbnailDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: De-Clickbait thumbnail CDN
+        PriceClass: PriceClass_100        # NA + EU edges only — cheapest, fits a US audience
+        HttpVersion: http2and3
+        DefaultCacheBehavior:
+          TargetOriginId: thumb-s3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # Managed-CachingOptimized
+        Origins:
+          - Id: thumb-s3
+            DomainName: !GetAtt ThumbnailBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt ThumbnailOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+
+  # Lets only THIS CloudFront distribution read the (otherwise private) bucket.
+  ThumbnailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ThumbnailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOACRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${ThumbnailBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${ThumbnailDistribution.Id}"
 
   # ── SQS (processing queue + dead-letter queue) ────────────────────────────────
   DeadLetterQueue:
@@ -75,6 +153,25 @@ Resources:
         deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
         maxReceiveCount: 3   # 3 failures → DLQ for manual inspection
 
+  # ── SQS for thumbnail extraction (separate from titles) ───────────────────────
+  # Decoupled from the title queue so the heavy Python/ffmpeg worker can fail,
+  # retry, and back up independently of the lean title path.
+  ThumbnailDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-thumb-dlq
+      MessageRetentionPeriod: 1209600   # 14 days
+
+  ThumbnailQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: de-clickbait-thumb-queue
+      VisibilityTimeout: 180   # >= ThumbnailWorker timeout (120s)
+      MessageRetentionPeriod: 86400   # 1 day
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ThumbnailDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
   # ── Resolver Lambda ───────────────────────────────────────────────────────────
   # Called by the Firefox extension on every feed load.
   # Hit  → returns rewritten title immediately.
@@ -86,8 +183,12 @@ Resources:
       FunctionName: de-clickbait-resolver
       CodeUri: src/resolver/
       Handler: index.handler
+      Runtime: nodejs22.x
       Timeout: 10
       MemorySize: 128
+      Environment:
+        Variables:
+          THUMB_QUEUE_URL: !Ref ThumbnailQueue
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref TitlesTable
@@ -95,6 +196,8 @@ Resources:
             TableName: !Ref TitlesTable
         - SQSSendMessagePolicy:
             QueueName: !GetAtt ProcessingQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ThumbnailQueue.QueueName
       Events:
         GetTitle:
           Type: HttpApi
@@ -130,6 +233,7 @@ Resources:
       FunctionName: de-clickbait-worker
       CodeUri: src/worker/
       Handler: index.handler
+      Runtime: nodejs22.x
       Timeout: 120   # transcript fetch + LLM call; well within SQS VisibilityTimeout
       MemorySize: 256
       Policies:
@@ -161,13 +265,72 @@ Resources:
         External:
           - "@aws-sdk/*"   # bundling @anthropic-ai/sdk (not in Lambda runtime)
 
+  # ── Thumbnail Worker Lambda (container image) ─────────────────────────────────
+  # Heavy, separate toolchain: Python + yt-dlp + static ffmpeg. Triggered by
+  # ThumbnailQueue. Per §7 retest: tv_embedded client exposes DASH <=1080p with
+  # downloadable URLs and NO PO token; sticky proxy session (URLs are IP-locked);
+  # we Range-fetch only the first ~MB (init+keyframe) and ffmpeg decodes it locally.
+  # Length-independent cost. Requires Docker for `sam build`.
+  ThumbnailWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: de-clickbait-thumbnail-worker
+      PackageType: Image
+      Timeout: 120
+      MemorySize: 2048
+      Environment:
+        Variables:
+          THUMB_BUCKET: !Ref ThumbnailBucket
+          THUMB_CDN_DOMAIN: !GetAtt ThumbnailDistribution.DomainName   # thumbUrl points here
+          PROXY_URL: !Ref ProxyUrl            # sticky -session-<id> is appended in code per video
+          YTDLP_PLAYER_CLIENT: "tv_embedded"  # DASH <=1080p with URLs, NO PO token (§7 retest)
+          MAX_HEIGHT: "720"                   # 720p is plenty for a feed card; ~half the bytes of 1080p
+          FETCH_BYTES: "1500000"             # ~1.5MB per extraction (720p init/moov + frames); cuts proxy GB
+          FRAME_VERSION: "2"
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref TitlesTable
+        - S3WritePolicy:
+            BucketName: !Ref ThumbnailBucket
+        - SQSPollerPolicy:
+            QueueName: !GetAtt ThumbnailQueue.QueueName
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ThumbnailQueue.Arn
+            BatchSize: 1
+            # Cap concurrent invokes from the SQS poller so a burst/backlog stays polite
+            # to the residential proxy (parallel hits → proxy 5xx + YT bot walls). Unlike
+            # ReservedConcurrentExecutions this does NOT reserve account concurrency, so
+            # it works on a low account limit. (Min allowed is 2.)
+            ScalingConfig:
+              MaximumConcurrency: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: src/thumbnail-worker
+      DockerTag: latest
+
 Outputs:
   ApiEndpoint:
     Description: HTTP API base URL — paste this into the Firefox extension config
     Value: !Sub "https://${TitleApi}.execute-api.${AWS::Region}.amazonaws.com"
   TableName:
     Value: !Ref TitlesTable
+  ThumbnailBucketName:
+    Description: S3 bucket holding extracted thumbnail frames
+    Value: !Ref ThumbnailBucket
+  ThumbnailCdnDomain:
+    Description: CloudFront domain serving thumbnails (thumbUrl = https://<this>/<videoId>.jpg)
+    Value: !GetAtt ThumbnailDistribution.DomainName
   QueueUrl:
     Value: !Ref ProcessingQueue
   DeadLetterQueueUrl:
     Value: !Ref DeadLetterQueue
+  ThumbnailQueueUrl:
+    Description: Drop a {"videoId":"..."} message here to manually test extraction
+    Value: !Ref ThumbnailQueue
+  ThumbnailDeadLetterQueueUrl:
+    Value: !Ref ThumbnailDeadLetterQueue

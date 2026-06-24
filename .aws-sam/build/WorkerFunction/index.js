@@ -10054,7 +10054,7 @@ var sdk_default = Anthropic;
 var ddb = new import_client_dynamodb.DynamoDBClient({});
 var anthropic = new sdk_default();
 var TODAY = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-var TTL_90_DAYS = 90 * 24 * 60 * 60;
+var TTL_180_DAYS = 180 * 24 * 60 * 60;
 var SYS_TITLE_ONLY = `You de-clickbait YouTube titles. You have ONLY the original title and the channel name \u2014 no information about what the video actually contains.
 Rewrite it to be calmer and less sensational while preserving its apparent meaning.
 Rules: remove ALL-CAPS, curiosity gaps, emoji, and hype words; keep proper nouns and channel name if relevant; aim for ~6\u20138 words.
@@ -10111,16 +10111,18 @@ Original title: ${originalTitle}`;
         messages: [{ role: "user", content: userMsg }]
       });
       const rewrittenTitle = response.content[0]?.type === "text" ? response.content[0].text.trim() : originalTitle;
-      await ddb.send(new import_client_dynamodb.PutItemCommand({
+      await ddb.send(new import_client_dynamodb.UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
-        Item: {
-          videoId: { S: videoId },
-          originalTitle: { S: originalTitle },
-          rewrittenTitle: { S: rewrittenTitle },
-          creator: { S: creator },
-          status: { S: "done" },
-          cachedAt: { N: String(Date.now()) },
-          ttl: { N: String(Math.floor(Date.now() / 1e3) + TTL_90_DAYS) }
+        Key: { videoId: { S: videoId } },
+        UpdateExpression: "SET originalTitle = :ot, rewrittenTitle = :rt, creator = :cr, #st = :st, cachedAt = :ca, #ttl = :ttl",
+        ExpressionAttributeNames: { "#st": "status", "#ttl": "ttl" },
+        ExpressionAttributeValues: {
+          ":ot": { S: originalTitle },
+          ":rt": { S: rewrittenTitle },
+          ":cr": { S: creator },
+          ":st": { S: "done" },
+          ":ca": { N: String(Date.now()) },
+          ":ttl": { N: String(Math.floor(Date.now() / 1e3) + TTL_180_DAYS) }
         }
       }));
       console.log(`\u2713 ${videoId}: "${originalTitle}" \u2192 "${rewrittenTitle}"`);

@@ -7,6 +7,9 @@ s3_prefix = "de-clickbait"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = false
+# The thumbnail worker is a container-image function; this lets SAM auto-create &
+# manage its ECR repo on deploy (otherwise the first deploy errors with no repo).
+resolve_image_repos = true
 image_repositories = []
 
 [default.global.parameters]

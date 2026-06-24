@@ -2,6 +2,7 @@ import {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  UpdateItemCommand,
   BatchGetItemCommand,
   BatchWriteItemCommand,
 } from "@aws-sdk/client-dynamodb";
@@ -12,6 +13,14 @@ const ddb = new DynamoDBClient({});
 const sqs = new SQSClient({});
 const TABLE = process.env.TABLE_NAME!;
 const QUEUE = process.env.QUEUE_URL!;
+const THUMB_QUEUE = process.env.THUMB_QUEUE_URL!;
+
+// Thumbnail self-heal: an item can exist (title done) but have no thumbUrl yet —
+// either it predates the thumb pipeline or an earlier extraction failed (e.g. proxy
+// outage). The resolver re-enqueues a thumb job for such items when viewed, bounded so
+// we don't spam a permanently-unextractable video (live/age-restricted/deleted).
+const MAX_THUMB_ATTEMPTS = 5;
+const THUMB_COOLDOWN_MS  = 30 * 60 * 1000;   // >= worst-case in-flight (3 SQS retries) + slack
 
 const HEADERS = {
   "Content-Type": "application/json",
@@ -29,7 +38,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 // ── POST /titles — batch lookup (what the extension calls) ────────────────────
 
 interface VideoInput { videoId: string; title: string; creator: string }
-interface VideoResult { rewrittenTitle: string | null; status: string }
+interface VideoResult { rewrittenTitle: string | null; status: string; thumbUrl?: string }
 
 async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   let videos: VideoInput[];
@@ -44,6 +53,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
 
   const results: Record<string, VideoResult> = {};
   const trueMisses: VideoInput[] = [];
+  const thumbReenqueue: string[] = [];   // existing items missing a thumbnail → self-heal
 
   // BatchGetItem reads up to 100 items per call
   for (const batch of chunk(videos, 100)) {
@@ -56,10 +66,22 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
       const videoId = item.videoId.S!;
       found.add(videoId);
       if (item.rewrittenTitle?.S) {
-        results[videoId] = { rewrittenTitle: item.rewrittenTitle.S, status: "hit" };
+        results[videoId] = { rewrittenTitle: item.rewrittenTitle.S, status: "hit", thumbUrl: item.thumbUrl?.S };
       } else {
-        // Already pending in flight — don't re-enqueue
-        results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending" };
+        // Title already pending in flight — don't re-enqueue the title
+        results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending", thumbUrl: item.thumbUrl?.S };
+      }
+
+      // Self-heal the thumbnail: item exists but has no frame yet → re-enqueue a thumb
+      // job, bounded by attempts + cooldown so permanent failures don't loop forever.
+      // Skip items the worker marked "unavailable" (age-gated/paid/removed) — those
+      // can never produce a frame, so re-enqueuing just wastes proxy bytes.
+      if (!item.thumbUrl?.S && item.thumbStatus?.S !== "unavailable") {
+        const attempts = parseInt(item.thumbAttempts?.N ?? "0", 10);
+        const lastEnq  = parseInt(item.thumbEnqueuedAt?.N ?? "0", 10);
+        if (attempts < MAX_THUMB_ATTEMPTS && Date.now() - lastEnq > THUMB_COOLDOWN_MS) {
+          thumbReenqueue.push(videoId);
+        }
       }
     }
 
@@ -85,11 +107,13 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
             [TABLE]: batch.map(v => ({
               PutRequest: {
                 Item: {
-                  videoId:      { S: v.videoId },
-                  status:       { S: "pending" },
-                  originalTitle:{ S: v.title },
-                  creator:      { S: v.creator },
-                  enqueuedAt:   { N: String(Date.now()) },
+                  videoId:        { S: v.videoId },
+                  status:         { S: "pending" },
+                  originalTitle:  { S: v.title },
+                  creator:        { S: v.creator },
+                  enqueuedAt:     { N: String(Date.now()) },
+                  thumbAttempts:  { N: "1" },                  // this enqueue counts as attempt 1
+                  thumbEnqueuedAt:{ N: String(Date.now()) },
                 },
               },
             })),
@@ -98,7 +122,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
       )
     );
 
-    // SQS SendMessageBatch — up to 10 per call
+    // SQS SendMessageBatch — up to 10 per call (title queue)
     Promise.all(
       chunk(unique, 10).map((batch, batchIdx) =>
         sqs.send(new SendMessageBatchCommand({
@@ -106,6 +130,46 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
           Entries: batch.map((v, i) => ({
             Id: String(batchIdx * 10 + i),
             MessageBody: JSON.stringify({ videoId: v.videoId, originalTitle: v.title, creator: v.creator }),
+          })),
+        })).catch(() => {})
+      )
+    );
+
+    // Thumbnail queue — separate worker, only needs the videoId
+    Promise.all(
+      chunk(unique, 10).map((batch, batchIdx) =>
+        sqs.send(new SendMessageBatchCommand({
+          QueueUrl: THUMB_QUEUE,
+          Entries: batch.map((v, i) => ({
+            Id: String(batchIdx * 10 + i),
+            MessageBody: JSON.stringify({ videoId: v.videoId }),
+          })),
+        })).catch(() => {})
+      )
+    );
+  }
+
+  // ── Self-heal: re-enqueue thumb jobs for existing items that still lack a frame ──
+  if (thumbReenqueue.length) {
+    const unique = [...new Set(thumbReenqueue)];
+
+    // Bump attempts + stamp the enqueue time (cooldown guard reads these next time).
+    Promise.all(unique.map(videoId =>
+      ddb.send(new UpdateItemCommand({
+        TableName: TABLE,
+        Key: { videoId: { S: videoId } },
+        UpdateExpression: "SET thumbEnqueuedAt = :now ADD thumbAttempts :one",
+        ExpressionAttributeValues: { ":now": { N: String(Date.now()) }, ":one": { N: "1" } },
+      })).catch(() => {})
+    ));
+
+    Promise.all(
+      chunk(unique, 10).map((batch, batchIdx) =>
+        sqs.send(new SendMessageBatchCommand({
+          QueueUrl: THUMB_QUEUE,
+          Entries: batch.map((videoId, i) => ({
+            Id: String(batchIdx * 10 + i),
+            MessageBody: JSON.stringify({ videoId }),
           })),
         })).catch(() => {})
       )
@@ -133,7 +197,7 @@ async function handleSingle(event: APIGatewayProxyEventV2): Promise<APIGatewayPr
   }));
 
   if (Item?.rewrittenTitle?.S) {
-    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit" }) };
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit", thumbUrl: Item.thumbUrl?.S }) };
   }
   if (Item?.status?.S === "pending") {
     return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" }) };
@@ -155,6 +219,10 @@ async function handleSingle(event: APIGatewayProxyEventV2): Promise<APIGatewayPr
       await sqs.send(new SendMessageCommand({
         QueueUrl: QUEUE,
         MessageBody: JSON.stringify({ videoId, originalTitle, creator }),
+      }));
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: THUMB_QUEUE,
+        MessageBody: JSON.stringify({ videoId }),
       }));
     } catch (err: any) {
       if (err.name !== "ConditionalCheckFailedException") throw err;

@@ -1,12 +1,14 @@
-import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import Anthropic from "@anthropic-ai/sdk";
 import type { SQSEvent, SQSBatchResponse } from "aws-lambda";
 
 const ddb       = new DynamoDBClient({});
 const anthropic = new Anthropic();
 
-const TODAY      = new Date().toISOString().split("T")[0];
-const TTL_90_DAYS = 90 * 24 * 60 * 60;
+const TODAY        = new Date().toISOString().split("T")[0];
+// Cached frames/titles never go stale, so we keep them long. 180d bounds storage
+// and lets deleted/privated videos fall out. Match the S3 lifecycle rule.
+const TTL_180_DAYS = 180 * 24 * 60 * 60;
 
 const SYS_TITLE_ONLY = `\
 You de-clickbait YouTube titles. You have ONLY the original title and the channel name — no information about what the video actually contains.
@@ -87,16 +89,22 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
           ? response.content[0].text.trim()
           : originalTitle;
 
-      await ddb.send(new PutItemCommand({
+      // UpdateItem (not PutItem) so we only touch the title attributes — the
+      // thumbnail worker writes thumbUrl on the same item and PutItem would
+      // clobber it (and vice versa). Each worker owns its own fields.
+      await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME!,
-        Item: {
-          videoId:        { S: videoId },
-          originalTitle:  { S: originalTitle },
-          rewrittenTitle: { S: rewrittenTitle },
-          creator:        { S: creator },
-          status:         { S: "done" },
-          cachedAt:       { N: String(Date.now()) },
-          ttl:            { N: String(Math.floor(Date.now() / 1000) + TTL_90_DAYS) },
+        Key: { videoId: { S: videoId } },
+        UpdateExpression:
+          "SET originalTitle = :ot, rewrittenTitle = :rt, creator = :cr, #st = :st, cachedAt = :ca, #ttl = :ttl",
+        ExpressionAttributeNames: { "#st": "status", "#ttl": "ttl" },
+        ExpressionAttributeValues: {
+          ":ot":  { S: originalTitle },
+          ":rt":  { S: rewrittenTitle },
+          ":cr":  { S: creator },
+          ":st":  { S: "done" },
+          ":ca":  { N: String(Date.now()) },
+          ":ttl": { N: String(Math.floor(Date.now() / 1000) + TTL_180_DAYS) },
         },
       }));
 

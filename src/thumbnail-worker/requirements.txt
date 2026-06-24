@@ -1,0 +1,7 @@
+# boto3 is NOT preinstalled in the lambda/python container base image (unlike the
+# managed zip runtime), so we install it explicitly.
+boto3
+# Left unpinned — YouTube walls break/refix in days; rebuild the image to track them.
+yt-dlp
+# Used for the Range byte-fetch through the proxy (requests proxies https; ffmpeg can't).
+requests

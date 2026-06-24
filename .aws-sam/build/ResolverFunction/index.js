@@ -28,6 +28,9 @@ var ddb = new import_client_dynamodb.DynamoDBClient({});
 var sqs = new import_client_sqs.SQSClient({});
 var TABLE = process.env.TABLE_NAME;
 var QUEUE = process.env.QUEUE_URL;
+var THUMB_QUEUE = process.env.THUMB_QUEUE_URL;
+var MAX_THUMB_ATTEMPTS = 5;
+var THUMB_COOLDOWN_MS = 30 * 60 * 1e3;
 var HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*"
@@ -49,6 +52,7 @@ async function handleBatch(event) {
   }
   const results = {};
   const trueMisses = [];
+  const thumbReenqueue = [];
   for (const batch of chunk(videos, 100)) {
     const res = await ddb.send(new import_client_dynamodb.BatchGetItemCommand({
       RequestItems: { [TABLE]: { Keys: batch.map((v) => ({ videoId: { S: v.videoId } })) } }
@@ -58,9 +62,16 @@ async function handleBatch(event) {
       const videoId = item.videoId.S;
       found.add(videoId);
       if (item.rewrittenTitle?.S) {
-        results[videoId] = { rewrittenTitle: item.rewrittenTitle.S, status: "hit" };
+        results[videoId] = { rewrittenTitle: item.rewrittenTitle.S, status: "hit", thumbUrl: item.thumbUrl?.S };
       } else {
-        results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending" };
+        results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending", thumbUrl: item.thumbUrl?.S };
+      }
+      if (!item.thumbUrl?.S && item.thumbStatus?.S !== "unavailable") {
+        const attempts = parseInt(item.thumbAttempts?.N ?? "0", 10);
+        const lastEnq = parseInt(item.thumbEnqueuedAt?.N ?? "0", 10);
+        if (attempts < MAX_THUMB_ATTEMPTS && Date.now() - lastEnq > THUMB_COOLDOWN_MS) {
+          thumbReenqueue.push(videoId);
+        }
       }
     }
     for (const v of batch) {
@@ -83,7 +94,10 @@ async function handleBatch(event) {
                   status: { S: "pending" },
                   originalTitle: { S: v.title },
                   creator: { S: v.creator },
-                  enqueuedAt: { N: String(Date.now()) }
+                  enqueuedAt: { N: String(Date.now()) },
+                  thumbAttempts: { N: "1" },
+                  // this enqueue counts as attempt 1
+                  thumbEnqueuedAt: { N: String(Date.now()) }
                 }
               }
             }))
@@ -105,6 +119,42 @@ async function handleBatch(event) {
         })
       )
     );
+    Promise.all(
+      chunk(unique, 10).map(
+        (batch, batchIdx) => sqs.send(new import_client_sqs.SendMessageBatchCommand({
+          QueueUrl: THUMB_QUEUE,
+          Entries: batch.map((v, i) => ({
+            Id: String(batchIdx * 10 + i),
+            MessageBody: JSON.stringify({ videoId: v.videoId })
+          }))
+        })).catch(() => {
+        })
+      )
+    );
+  }
+  if (thumbReenqueue.length) {
+    const unique = [...new Set(thumbReenqueue)];
+    Promise.all(unique.map(
+      (videoId) => ddb.send(new import_client_dynamodb.UpdateItemCommand({
+        TableName: TABLE,
+        Key: { videoId: { S: videoId } },
+        UpdateExpression: "SET thumbEnqueuedAt = :now ADD thumbAttempts :one",
+        ExpressionAttributeValues: { ":now": { N: String(Date.now()) }, ":one": { N: "1" } }
+      })).catch(() => {
+      })
+    ));
+    Promise.all(
+      chunk(unique, 10).map(
+        (batch, batchIdx) => sqs.send(new import_client_sqs.SendMessageBatchCommand({
+          QueueUrl: THUMB_QUEUE,
+          Entries: batch.map((videoId, i) => ({
+            Id: String(batchIdx * 10 + i),
+            MessageBody: JSON.stringify({ videoId })
+          }))
+        })).catch(() => {
+        })
+      )
+    );
   }
   return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ results }) };
 }
@@ -121,7 +171,7 @@ async function handleSingle(event) {
     Key: { videoId: { S: videoId } }
   }));
   if (Item?.rewrittenTitle?.S) {
-    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit" }) };
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: Item.rewrittenTitle.S, status: "hit", thumbUrl: Item.thumbUrl?.S }) };
   }
   if (Item?.status?.S === "pending") {
     return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" }) };
@@ -142,6 +192,10 @@ async function handleSingle(event) {
       await sqs.send(new import_client_sqs.SendMessageCommand({
         QueueUrl: QUEUE,
         MessageBody: JSON.stringify({ videoId, originalTitle, creator })
+      }));
+      await sqs.send(new import_client_sqs.SendMessageCommand({
+        QueueUrl: THUMB_QUEUE,
+        MessageBody: JSON.stringify({ videoId })
       }));
     } catch (err) {
       if (err.name !== "ConditionalCheckFailedException") throw err;
