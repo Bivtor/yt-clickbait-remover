@@ -1,10 +1,37 @@
 // De-Clickbait — content script
 // Collects video cards, sends ONE batch request, swaps clickbait titles + thumbnails.
 //
-// Thumbnails now come from OUR server: the /titles response carries a `thumbUrl`
+// Thumbnails come from OUR server: the /titles response carries a `thumbUrl`
 // (CloudFront URL of a server-extracted frame). The old client-side frame-capture
-// approach (hidden <video> + canvas) was removed — it was unreliable (canvas taint /
-// DRM / black frames) and is replaced by server-side extraction.
+// approach (hidden <video> + canvas) was removed — unreliable (canvas taint / DRM /
+// black frames) and is replaced by server-side extraction.
+//
+// ── P0: NO-FLASH LOADING (THUMBNAIL_PIPELINE §15) ───────────────────────────────
+// The flash isn't a timing bug we can out-run — the data lives on our server and needs
+// a round-trip, so at first paint we don't have it yet. Instead of showing YouTube's
+// clickbait original and then swapping it (the flash), we HIDE the original until our
+// data is ready, then reveal. The user sees `placeholder → clean`, never `clickbait →
+// clean`. There is no visible swap because the clickbait version was never shown.
+//
+// Mechanism: a CSS gate injected at document_start (before YouTube paints). It is a
+// STANDING, session-long rule keyed on card-level data-attributes we control, so it masks
+// the initial feed AND every later card (infinite scroll, "Show more") uniformly, at
+// DOM-insert time, with no JS race. JS flips the attributes PER CARD once it has applied
+// (or decided to give up on) that card — there is no global reveal, so late-loaded cards
+// never flash their original. A server outage or hung request can't strand a card either:
+// each request is bounded by an AbortController timeout, and every card releases its masks
+// at the CURE_MS deadline regardless.
+//
+//   Title axis (card[data-dc-title]):  absent → hidden (loading);  present → revealed.
+//   Thumb axis (card[data-dc-thumb]):  absent → dark cover (loading)
+//                                      "hit"  → our overlay frame shown (cover gone)
+//                                      "miss" → BLACK cover, fades in on hover to reveal
+//                                               the original (the agreed miss treatment)
+//                                      "orig" → original shown as-is (hard error fallback)
+//
+//   Hit  (cached): mask → reveal clean. True no-flash.
+//   Miss (uncached): title reveals the original; thumb blacks out (hover to peek) until
+//                    re-query/polling cures it. Never shows a clickbait *thumbnail*.
 
 const API_BASE = "https://u2qi2puu47.execute-api.us-west-1.amazonaws.com";
 
@@ -21,6 +48,56 @@ const CARD_SELECTOR = [
   "ytd-grid-video-renderer",       // Channel page grid
   "ytd-playlist-video-renderer",   // Playlist items
 ].join(", ");
+
+// Inner targets the CSS gate masks (kept in sync with getCardInfo's queries).
+const TITLE_SEL = "a.ytLockupMetadataViewModelTitle, yt-formatted-string#video-title, span#video-title";
+const THUMB_SEL = ".ytThumbnailViewModelImage, ytd-thumbnail";
+
+// ── P0: CSS gate (injected at document_start, before first paint) ───────────────
+// A STANDING rule keyed only on card-level data-attributes we control. It masks the
+// initial feed AND every later-loaded card (infinite scroll, "Show more") uniformly, at
+// DOM-insert time, with no JS race — and stays active the whole session. Masks are
+// released PER CARD (JS sets the attributes); there is no global reveal, so late cards
+// never flash their original. Robustness comes from the per-card cure deadline + an
+// AbortController fetch timeout (see below), not a session-wide failsafe.
+
+const GATE_CSS = `
+/* TITLE — hidden until the card is marked (rewrite applied, or original released). */
+:is(${CARD_SELECTOR}):not([data-dc-title]) :is(${TITLE_SEL}) {
+  visibility: hidden !important;
+}
+
+/* THUMB loading — neutral dark cover until we know hit vs miss (no clickbait shown). */
+:is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
+  position: relative;
+}
+:is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
+  content: ""; position: absolute; inset: 0; background: #0f0f0f; z-index: 2; pointer-events: none;
+}
+
+/* THUMB miss — solid BLACK over the original; fades in gently on hover so the user can
+   peek the original. Set only at the terminal cure deadline (a decision, not a stall). */
+:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}) {
+  position: relative;
+}
+:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL})::after {
+  content: ""; position: absolute; inset: 0; background: #000; z-index: 2; pointer-events: none;
+  opacity: 1; transition: opacity .45s ease;
+}
+:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}):hover::after {
+  opacity: 0;
+}
+/* "hit" and "orig" carry the attribute but match no ::after rule → cover gone. */
+`;
+
+function injectGateCss() {
+  if (document.getElementById("dc-gate-style")) return;
+  const style = document.createElement("style");
+  style.id = "dc-gate-style";
+  style.textContent = GATE_CSS;
+  // documentElement always exists at document_start (head/body may not yet).
+  (document.head || document.documentElement).appendChild(style);
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -63,22 +140,21 @@ function getCardInfo(card) {
   return { videoId, originalTitle, creator, h3, visibleSpan, titleLink, classicTitleEl, thumbImg };
 }
 
-// ── Thumbnail swap ─────────────────────────────────────────────────────────────
+// ── Thumbnail swap (HIT) ───────────────────────────────────────────────────────
 // We do NOT mutate YouTube's own <img>.src — its yt-core-image component owns that
-// element and resets src on render/scroll, so we'd lose a fighting match. Instead we
-// OVERLAY our own <img> on top of YouTube's thumbnail. YouTube's render loop never
-// touches an element it doesn't manage, so the overlay sticks. Idempotent +
-// self-healing: re-creates the overlay if YouTube ever removes it.
+// element and resets src on render/scroll. Instead we OVERLAY our own <img> on top.
+// YouTube's render loop never touches an element it doesn't manage, so the overlay
+// sticks. We flip the card to data-dc-thumb="hit" only on the overlay's `load` event,
+// so the loading cover stays up until our frame is actually painted — no half-loaded
+// flash, no clean→clean pop.
 
-function swapThumbnail(thumbImg, thumbUrl) {
-  if (!thumbUrl) return;
-  if (!thumbImg) { console.log(`[DC] swapThumbnail: NO <img> element found for ${thumbUrl}`); return; }
-
+function showThumbHit(card, thumbImg, thumbUrl) {
+  if (!thumbImg) { console.log(`[DC] showThumbHit: NO <img> element for ${thumbUrl}`); return; }
   const host = thumbImg.parentElement;
-  if (!host) { console.log(`[DC] swapThumbnail: <img> has no parent for ${thumbUrl}`); return; }
+  if (!host) { console.log(`[DC] showThumbHit: <img> has no parent for ${thumbUrl}`); return; }
 
   let overlay = host.querySelector(":scope > img.dc-thumb-overlay");
-  if (overlay && overlay.dataset.dcThumb === thumbUrl) return;   // already overlaid this frame
+  if (overlay && overlay.dataset.dcThumb === thumbUrl && card.dataset.dcThumb === "hit") return;
 
   if (!overlay) {
     if (getComputedStyle(host).position === "static") host.style.position = "relative";
@@ -89,9 +165,22 @@ function swapThumbnail(thumbImg, thumbUrl) {
     host.appendChild(overlay);
   }
   overlay.dataset.dcThumb = thumbUrl;
+  // Reveal only once the frame has actually decoded (covers the load gap cleanly).
+  overlay.onload = () => {
+    card.dataset.dcThumb = "hit";
+    console.log(`[DC] thumb hit revealed -> ${thumbUrl}`);
+  };
+  // If our frame can't load (broken/expired CDN object), don't leave the card stuck on
+  // the loading cover — reveal the original so it's never permanently masked.
+  overlay.onerror = () => {
+    overlay.remove();
+    if (card.dataset.dcThumb !== "hit") card.dataset.dcThumb = "orig";
+    console.log(`[DC] thumb overlay failed to load -> ${thumbUrl} (revealing original)`);
+  };
   overlay.src = thumbUrl;
   thumbImg.dataset.dcThumb = thumbUrl;
-  console.log(`[DC] overlaid thumbnail -> ${thumbUrl}`);
+  // If it was already cached/complete, onload may not fire — reveal immediately.
+  if (overlay.complete && overlay.naturalWidth > 0) card.dataset.dcThumb = "hit";
 }
 
 // ── Apply rewritten title ──────────────────────────────────────────────────────
@@ -111,29 +200,80 @@ function applyTitle(info, rewrittenTitle) {
   if (titleLink) titleLink.dataset.dcOriginal = originalTitle;
 }
 
-// ── Core: one batch request for all unprocessed cards on the page ──────────────
-// Title and thumbnail resolve INDEPENDENTLY and may arrive on different loads (the
-// thumbnail worker is separate + slower). So we keep re-querying a card until BOTH
-// are applied, up to MAX_TRIES, then give up (the card just keeps whatever it has).
+// ── Core: lifecycle, request, and apply ────────────────────────────────────────
+// Title and thumbnail resolve INDEPENDENTLY and may arrive on different ticks (the
+// thumbnail worker is separate + slower), so each card is curable until BOTH land or it
+// ages out. Timings are WALL-CLOCK from first-seen (deterministic regardless of how many
+// ticks fire):
+//
+//   TITLE_RELEASE_MS — a blank title line is jarring, so if no rewrite has arrived by
+//     here we reveal the ORIGINAL title (and keep curing — a later rewrite still upgrades
+//     it). A *rewrite* is the only terminal title state.
+//   CURE_MS — terminal. The thumbnail stays on the neutral loading cover the whole cure
+//     window; only here, if still no frame, does it switch to the black hover-fade miss.
+//     A *frame* is the only terminal thumb state. (THUMBNAIL_PIPELINE §15: keeps
+//     uncached infinite-scroll blocks from looking like permanent "blocks of black" —
+//     they cure to the real frame as the worker catches up, within CURE_MS.)
 
-const MAX_TRIES = 6;
+const TITLE_RELEASE_MS = 9000;    // reveal original title by here if no rewrite yet
+const CURE_MS          = 30000;   // give up (black thumb / keep original) past here
+const FETCH_TIMEOUT_MS = 8000;    // bound each request so a hang can't stall the lane
 
-async function processAllCards() {
-  const all = [...document.querySelectorAll(CARD_SELECTOR)];
-  // Reprocess anything not finished or skipped (covers undefined, "pending", "err").
-  const unprocessed = all.filter(card => card.dataset.dc !== "done" && card.dataset.dc !== "skip");
-  if (!unprocessed.length) return;
+// Resolve one card against a /titles result (or {} on miss/error). Returns true if the
+// card is still pending (not terminal) — used to decide whether to keep the cure lane alive.
+function resolveCard(card, info, result) {
+  const original = card.dataset.dcOrig ?? info.originalTitle;
+  const age = Date.now() - Number(card.dataset.dcSeen || Date.now());
 
-  const entries = unprocessed.map(card => ({ card, info: getCardInfo(card) }));
-  entries.forEach(({ card, info }) => { if (!info) card.dataset.dc = "skip"; });
+  // THUMB — overlay our frame whenever the server has one. The card flips to
+  // data-dc-thumb="hit" on the overlay's load event (so the cover holds until painted).
+  if (result.thumbUrl) showThumbHit(card, info.thumbImg, result.thumbUrl);
+
+  // TITLE — a rewrite is terminal + reveals immediately; otherwise reveal the original
+  // once we've waited TITLE_RELEASE_MS (still curable for a later rewrite).
+  const titleHit = result.status === "hit" && !!result.rewrittenTitle;
+  if (titleHit) {
+    if (result.rewrittenTitle !== original) {
+      applyTitle({ ...info, originalTitle: original }, result.rewrittenTitle);
+    }
+    card.dataset.dcTitle = "";   // reveal the rewrite
+  } else if (card.dataset.dcTitle === undefined && age >= TITLE_RELEASE_MS) {
+    card.dataset.dcTitle = "";   // reveal original; keep curing
+  }
+
+  // Terminal when BOTH are truly in, or when we've exhausted the cure window.
+  if (titleHit && result.thumbUrl) {
+    card.dataset.dc = "done";
+    return false;
+  }
+  if (age >= CURE_MS) {
+    card.dataset.dc = "done";
+    if (card.dataset.dcTitle === undefined) card.dataset.dcTitle = "";          // keep original
+    if (!result.thumbUrl && card.dataset.dcThumb !== "hit") card.dataset.dcThumb = "miss"; // black
+    return false;
+  }
+  card.dataset.dc = "pending";
+  return true;
+}
+
+// Batch-request /titles for the given cards and apply results. Stashes the true original
+// title + first-seen timestamp on first contact. Drives the cure lane while work remains.
+async function requestAndApply(cards) {
+  const entries = cards.map(card => ({ card, info: getCardInfo(card) }));
+  // A card with no recognizable info isn't one we mask — release it fully so the gate
+  // (which only keys on our attrs) never traps a non-video element.
+  entries.forEach(({ card, info }) => {
+    if (!info) { card.dataset.dc = "skip"; card.dataset.dcTitle = ""; card.dataset.dcThumb = "orig"; }
+  });
 
   const valid = entries.filter(({ info }) => info !== null);
   if (!valid.length) return;
 
-  // Stash the TRUE original title once, so re-queries don't read a title we already
-  // rewrote in the DOM. Use the stashed value for the request + comparison.
   for (const { card, info } of valid) {
-    if (!card.dataset.dcOrig) card.dataset.dcOrig = info.originalTitle;
+    if (!card.dataset.dcOrig) {
+      card.dataset.dcOrig = info.originalTitle;
+      card.dataset.dcSeen = String(Date.now());
+    }
   }
 
   // Deduplicate by videoId before sending to the API.
@@ -146,69 +286,84 @@ async function processAllCards() {
     }
   }
 
+  let results = null;
   try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     const resp = await fetch(`${API_BASE}/titles`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ videos }),
-    });
-    if (!resp.ok) {
-      valid.forEach(({ card }) => { card.dataset.dc = "err"; });
-      return;
-    }
-
-    const { results } = await resp.json();
-
-    const ids = Object.keys(results ?? {});
-    console.log(`[DC] /titles → ${ids.length} results | hits=${ids.filter(id => results[id].status === "hit").length} | withThumb=${ids.filter(id => results[id].thumbUrl).length}`);
-
-    for (const { card, info } of valid) {
-      const result = results?.[info.videoId];
-      if (!result) { card.dataset.dc = "err"; continue; }
-
-      // Diagnostic: status, returned thumbUrl (open it to verify CloudFront), and whether
-      // we even located the card's <img> element to swap.
-      console.log(`[DC] ${info.videoId} status=${result.status} thumbImg=${info.thumbImg ? "found" : "MISSING"} thumb=${result.thumbUrl ?? "—"} title=${result.rewrittenTitle ? JSON.stringify(result.rewrittenTitle) : "—"}`);
-
-      const original = card.dataset.dcOrig ?? info.originalTitle;
-
-      // Thumbnail — apply whenever the server has one (independent of the title).
-      if (result.thumbUrl) swapThumbnail(info.thumbImg, result.thumbUrl);
-
-      // Title — apply on a hit (skip if it's already the same text).
-      const titleResolved = result.status === "hit" && !!result.rewrittenTitle;
-      if (titleResolved && result.rewrittenTitle !== original) {
-        applyTitle({ ...info, originalTitle: original }, result.rewrittenTitle);
-      }
-
-      // Finished only when BOTH are in. Otherwise retry on later ticks (bounded).
-      if (titleResolved && result.thumbUrl) {
-        card.dataset.dc = "done";
-      } else {
-        const tries = parseInt(card.dataset.dcTries ?? "0", 10) + 1;
-        card.dataset.dcTries = String(tries);
-        card.dataset.dc = tries >= MAX_TRIES ? "done" : "pending";
-      }
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(to));
+    if (resp.ok) {
+      ({ results } = await resp.json());
+      const ids = Object.keys(results ?? {});
+      console.log(`[DC] /titles → ${ids.length} results | hits=${ids.filter(id => results[id].status === "hit").length} | withThumb=${ids.filter(id => results[id].thumbUrl).length}`);
+    } else {
+      console.log(`[DC] /titles HTTP ${resp.status} — will retry via cure lane`);
     }
   } catch (e) {
-    console.error("[DC] fetch error:", e);
-    valid.forEach(({ card }) => { card.dataset.dc = "err"; });
+    console.log(`[DC] /titles request failed (${e.name}) — will retry via cure lane`);
   }
+
+  // Apply (results===null on error → every card resolves against {} = a transient miss:
+  // it stays pending and the cure lane retries, and the CURE_MS deadline still releases it).
+  let anyPending = false;
+  for (const { card, info } of valid) {
+    const result = (results && results[info.videoId]) || {};
+    if (resolveCard(card, info, result)) anyPending = true;
+  }
+  if (anyPending) ensureCureLane();
 }
 
-// ── MutationObserver + SPA navigation ─────────────────────────────────────────
+// ── P1: two-lane scheduling (discover + cure) ──────────────────────────────────
+// DISCOVER (event-driven): process cards we've never seen. Fired by the MutationObserver
+//   + initial + SPA-nav, so every newly-inserted card (initial feed, infinite scroll,
+//   "Show more") is masked and requested the instant it appears — never re-queries an
+//   already-seen card, so scroll churn doesn't multiply API calls.
+// CURE (timer-driven): re-query cards that are seen-but-unresolved, on a gentle interval,
+//   only while such cards exist (self-stops when none). This is the bounded polling that
+//   upgrades a miss to the real frame/rewrite as the worker catches up — one batched,
+//   read-only request per tick (the resolver's re-enqueue cooldown protects the queue).
+
+const needsDiscovery = card => !card.dataset.dcSeen && card.dataset.dc !== "skip";
+const needsCure      = card => card.dataset.dcSeen && card.dataset.dc !== "done" && card.dataset.dc !== "skip";
+
+function collectAndApply(predicate) {
+  const cards = [...document.querySelectorAll(CARD_SELECTOR)].filter(predicate);
+  if (cards.length) requestAndApply(cards);
+}
+
+const discover = () => collectAndApply(needsDiscovery);
+
+const CURE_INTERVAL_MS = 5000;   // ≈ the chosen decaying cadence; per-card CURE_MS caps it
+let cureTimer = null;
+function ensureCureLane() {
+  if (cureTimer) return;
+  cureTimer = setTimeout(() => {
+    cureTimer = null;
+    collectAndApply(needsCure);   // resolveCard re-arms the lane if anything is still pending
+  }, CURE_INTERVAL_MS);
+}
+
+// ── Bootstrap + MutationObserver + SPA navigation ──────────────────────────────
+// run_at is document_start now, so inject the gate before YouTube paints, then watch
+// for cards. Observe documentElement (body may not exist yet at document_start).
+
+injectGateCss();
 
 let debounceTimer;
 const observer = new MutationObserver(() => {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(processAllCards, 300);
+  debounceTimer = setTimeout(discover, 300);
 });
 
-observer.observe(document.body, { childList: true, subtree: true });
+observer.observe(document.documentElement, { childList: true, subtree: true });
 
 document.addEventListener("yt-navigate-finish", () => {
   clearTimeout(debounceTimer);
-  processAllCards();
+  discover();
 });
 
-processAllCards();
+discover();
