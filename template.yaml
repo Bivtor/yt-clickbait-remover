@@ -20,6 +20,13 @@ Parameters:
   ProxyUrl:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /de-clickbait/proxy-url
+  # Frame-selection heuristic version. Shared by the thumbnail worker (writes thumbVersion)
+  # AND the resolver (re-enqueues items whose thumbVersion != this, so a bump lazily
+  # re-extracts existing thumbnails as they're viewed). Bump when pick logic changes.
+  # v3 = entropy-gated blur vote (§16).
+  FrameVersion:
+    Type: String
+    Default: "3"
 
 Globals:
   Function:
@@ -189,6 +196,7 @@ Resources:
       Environment:
         Variables:
           THUMB_QUEUE_URL: !Ref ThumbnailQueue
+          FRAME_VERSION: !Ref FrameVersion   # re-enqueue items whose thumbVersion != this (lazy re-extract on view)
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref TitlesTable
@@ -285,8 +293,10 @@ Resources:
           PROXY_URL: !Ref ProxyUrl            # sticky -session-<id> is appended in code per video
           YTDLP_PLAYER_CLIENT: "tv_embedded"  # DASH <=1080p with URLs, NO PO token (§7 retest)
           MAX_HEIGHT: "720"                   # 720p is plenty for a feed card; ~half the bytes of 1080p
-          FETCH_BYTES: "1500000"             # ~1.5MB per extraction (720p init/moov + frames); cuts proxy GB
-          FRAME_VERSION: "2"
+          FETCH_BYTES: "200000"              # ~0.2MB: §16 floor + HARD CAP on proxy bytes/extraction (no big re-fetch)
+          DARK_YAVG: "16"                     # luma below this = near-black; excluded from the tier-A vote (§16)
+          THUMB_ENTROPY_MIN: "5.0"           # min frame entropy (bits) to count as "real content" in the vote (§16)
+          FRAME_VERSION: !Ref FrameVersion   # v3 entropy-gated blur vote; bump → resolver lazily re-extracts old thumbs
       Policies:
         - DynamoDBWritePolicy:
             TableName: !Ref TitlesTable

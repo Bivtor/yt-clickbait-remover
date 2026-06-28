@@ -14,6 +14,9 @@ const sqs = new SQSClient({});
 const TABLE = process.env.TABLE_NAME!;
 const QUEUE = process.env.QUEUE_URL!;
 const THUMB_QUEUE = process.env.THUMB_QUEUE_URL!;
+// Current frame-selection heuristic version. Items whose stored thumbVersion differs are
+// re-enqueued (lazily, as viewed) so a heuristic change re-extracts old thumbnails.
+const FRAME_VERSION = process.env.FRAME_VERSION;
 
 // Thumbnail self-heal: an item can exist (title done) but have no thumbUrl yet —
 // either it predates the thumb pipeline or an earlier extraction failed (e.g. proxy
@@ -72,11 +75,14 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
         results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending", thumbUrl: item.thumbUrl?.S };
       }
 
-      // Self-heal the thumbnail: item exists but has no frame yet → re-enqueue a thumb
-      // job, bounded by attempts + cooldown so permanent failures don't loop forever.
-      // Skip items the worker marked "unavailable" (age-gated/paid/removed) — those
-      // can never produce a frame, so re-enqueuing just wastes proxy bytes.
-      if (!item.thumbUrl?.S && item.thumbStatus?.S !== "unavailable") {
+      // Self-heal the thumbnail: re-enqueue a thumb job when the item has NO frame yet,
+      // OR has one from an OLD heuristic version (FRAME_VERSION bumped → lazy re-extract
+      // as viewed). Bounded by attempts + cooldown so permanent failures don't loop, and
+      // skipped for "unavailable" items (age-gated/paid/removed) that can never yield a frame.
+      const missingThumb = !item.thumbUrl?.S;
+      const staleThumb   = !!item.thumbUrl?.S && !!FRAME_VERSION
+                           && item.thumbVersion?.S !== FRAME_VERSION;
+      if ((missingThumb || staleThumb) && item.thumbStatus?.S !== "unavailable") {
         const attempts = parseInt(item.thumbAttempts?.N ?? "0", 10);
         const lastEnq  = parseInt(item.thumbEnqueuedAt?.N ?? "0", 10);
         if (attempts < MAX_THUMB_ATTEMPTS && Date.now() - lastEnq > THUMB_COOLDOWN_MS) {

@@ -7,13 +7,22 @@ Recipe validated live through the Decodo residential proxy on 2026-06-23
   * The **tv_embedded** player client exposes DASH video-only formats up to 1080p
     WITH downloadable URLs and **NO PO token** (the web client is SABR-walled even
     with a token; tv_embedded is not). -> bgutil / JS runtime / token cache all dropped.
-  * Stream URLs are **IP-locked** to the gate exit IP, so we use a **sticky session**
-    (a -session-<id> suffix on the Decodo username) for the gate + the byte fetch.
-  * Timestamp is free: we grab only the **first ~MB** of the chosen format via an
-    HTTP Range request (through the sticky proxy) — that contains the init/moov + the
-    opening keyframe — and decode that ONE keyframe. A few hundred KB regardless of
-    video length. ffmpeg never touches the network (it can't proxy reliably); it only
-    reads the local partial file.
+  * Stream URLs need a **residential** exit IP (datacenter is 403'd, §16); we use a sticky
+    -session-<id> on the Decodo username for the gate + byte fetch. NOTE (§16): the URL is
+    NOT locked to the EXACT gate IP — any residential IP works — so sticky is belt-and-suspenders,
+    not strictly required.
+  * Timestamp is free: we grab only the **first ~0.2MB** (FETCH_BYTES, §16) of the chosen
+    format via an HTTP Range request (through the sticky proxy) — that contains the init/moov +
+    the opening keyframes. A few hundred KB regardless of video length. ffmpeg never touches the
+    network (it can't proxy reliably); it only reads the local partial file.
+  * Frame pick = **entropy-gated blur vote** (`pick_frame`, FRAME_VERSION 3): one ffmpeg pass
+    scores every decoded frame (blurdetect + entropy + signalstats) and picks the sharpest
+    high-information frame, steering off flat/black/single-colour/intro frames. Falls back
+    gracefully (tier B/C) when the whole 0.2MB buffer is intro animation ('need more data').
+  * **Per-extraction proxy spend is hard-capped at FETCH_BYTES** — there is NO big re-fetch on a
+    bad frame (§16 decision). A creator's black/info intro frame is an *accurate* thumbnail, so
+    we keep it. If the fetch decodes nothing at all, we just raise → normal SQS retry (still only
+    FETCH_BYTES) → DLQ.
 
 Flow per SQS message ({"videoId": "..."}):
   1. GATE  — yt-dlp (tv_embedded) via sticky proxy: pick best avc/mp4 video-only <=1080p.
@@ -24,10 +33,13 @@ Flow per SQS message ({"videoId": "..."}):
 Downloaded byte count is logged per extraction = the proxy bill. Watch it in CloudWatch.
 """
 
+import glob
 import json
 import logging
 import os
+import re
 import secrets
+import shutil
 import subprocess
 import time
 
@@ -49,13 +61,14 @@ REGION         = os.environ.get("AWS_REGION", "us-west-1")
 PROXY          = os.environ.get("PROXY_URL", "").strip()
 PLAYER_CLIENT  = os.environ.get("YTDLP_PLAYER_CLIENT", "tv_embedded").strip()
 MAX_HEIGHT     = int(os.environ.get("MAX_HEIGHT", "720"))             # cap: 720p is plenty for a feed card
-FETCH_BYTES    = int(os.environ.get("FETCH_BYTES", "1500000"))        # ~1.5MB: enough at 720p for init/moov + frames
-FETCH_RETRY    = int(os.environ.get("FETCH_RETRY_BYTES", "4000000"))  # one bigger retry if decode fails
-THUMB_FRAMES   = int(os.environ.get("THUMB_FRAMES", "300"))           # frames the thumbnail filter scans to pick a clean one
-FRAME_VERSION  = os.environ.get("FRAME_VERSION", "2")                 # bumped: 360p->1080p heuristic
+FETCH_BYTES    = int(os.environ.get("FETCH_BYTES", "200000"))         # ~0.2MB: §16 floor. HARD CAP on proxy bytes/extraction — no big re-fetch.
+FRAME_VERSION  = os.environ.get("FRAME_VERSION", "3")                 # v3: entropy-gated blur vote (was thumbnail filter)
 TARGET_WIDTH   = int(os.environ.get("TARGET_WIDTH", "1920"))          # no upscale; ~no-op for <=1080p
 JPEG_QUALITY   = os.environ.get("JPEG_QUALITY", "3")                  # ffmpeg -q:v (2 best .. 31 worst)
 MIN_JPEG_BYTES = int(os.environ.get("MIN_JPEG_BYTES", "2000"))        # below this = decode produced nothing usable
+DARK_YAVG      = float(os.environ.get("DARK_YAVG", "16"))             # mean luma below this = near-black (excluded from tier-A vote, §16)
+BRIGHT_YAVG    = float(os.environ.get("BRIGHT_YAVG", "250"))          # mean luma above this = blown white (excluded from tier-A vote)
+ENTROPY_MIN    = float(os.environ.get("THUMB_ENTROPY_MIN", "5.0"))    # min image entropy (bits) for "real content" — steers off flat/solid/intro frames (§16)
 TTL_DAYS       = int(os.environ.get("TTL_DAYS", "180"))
 FFMPEG         = "/usr/local/bin/ffmpeg"
 
@@ -140,26 +153,88 @@ def fetch_head(url: str, headers: dict, nbytes: int, proxy: str) -> bytes:
     return r.content
 
 
-def decode_thumb(seg_path: str, out_path: str) -> bool:
-    """Pick a representative non-black frame from the partial buffer via the
-    thumbnail filter. NOTE: we judge success by the output file, NOT ffmpeg's exit
-    code — the truncated tail of the partial mp4 reliably produces NAL errors +
-    a non-zero rc even though a good frame was written."""
+_FRAMES_DIR = "/tmp/dc_frames"
+
+
+def _parse_frame_metrics(meta_path: str):
+    """Parse ffmpeg metadata=print output → per-frame {blur, ent, y} in decode order.
+    Keys: lavfi.blur (blurdetect, lower=sharper), lavfi.entropy.entropy.normal.Y (image
+    information, higher=more detail — NOTE the doubled 'entropy'), lavfi.signalstats.YAVG."""
+    frames, cur = [], {}
+    if not os.path.exists(meta_path):
+        return frames
+    with open(meta_path) as fh:
+        for ln in fh:
+            if ln.startswith("frame:"):
+                if cur:
+                    frames.append(cur)
+                cur = {}
+            m = re.search(r"lavfi\.blur=([0-9.]+)", ln)
+            if m: cur["blur"] = float(m.group(1))
+            m = re.search(r"entropy\.entropy\.normal\.Y=([0-9.]+)", ln)
+            if m: cur["ent"] = float(m.group(1))
+            m = re.search(r"signalstats\.YAVG=([0-9.]+)", ln)
+            if m: cur["y"] = float(m.group(1))
+    if cur:
+        frames.append(cur)
+    return frames
+
+
+def _best_index(frames):
+    """Entropy-gated blur vote (§16). Tier A: the sharpest (lowest blur) frame that is
+    neither near-black nor blown-out AND is high-entropy (real visual content) — this
+    steers away from flat/black/single-colour/intro frames. Falls back to sharpest
+    not-dark (B), then sharpest of anything (C) when the buffer holds only intro frames
+    ('need more data' videos). Returns (index, tier)."""
+    n = len(frames)
+    poolA = [i for i in range(n)
+             if DARK_YAVG <= frames[i].get("y", 0) <= BRIGHT_YAVG
+             and frames[i].get("ent", 0) >= ENTROPY_MIN]
+    poolB = [i for i in range(n) if frames[i].get("y", 0) >= DARK_YAVG]
+    if poolA:   pool, tier = poolA, "A"
+    elif poolB: pool, tier = poolB, "B"
+    else:       pool, tier = list(range(n)), "C"
+    best = min(pool, key=lambda i: frames[i].get("blur", 1e9))
+    return best, tier
+
+
+def pick_frame(seg_path: str, out_path: str):
+    """Decode every frame in the partial buffer, score each (blurdetect + entropy +
+    signalstats in ONE pass, no extra proxy bytes), and copy out the voted best frame.
+    Returns (ok, luma, tier, nframes). NOTE: success is judged by the output file, not
+    ffmpeg's exit code — the truncated tail of the partial mp4 reliably yields NAL errors
+    + a non-zero rc even though the good frames decoded fine."""
+    shutil.rmtree(_FRAMES_DIR, ignore_errors=True)
+    os.makedirs(_FRAMES_DIR, exist_ok=True)
+    meta = os.path.join(_FRAMES_DIR, "m.txt")
+    # blurdetect+entropy+signalstats compute metrics on the full-res frame; scale is for the
+    # written JPEG only; metadata=print emits per-frame metrics aligned with the f_%05d.jpg.
+    cmd = [
+        FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-i", seg_path,
+        "-vf", f"blurdetect,entropy,signalstats,scale='min({TARGET_WIDTH},iw)':-2,"
+               f"metadata=print:file={meta}",
+        "-q:v", str(JPEG_QUALITY), os.path.join(_FRAMES_DIR, "f_%05d.jpg"),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+    frames = _parse_frame_metrics(meta)
+    jpgs = sorted(glob.glob(os.path.join(_FRAMES_DIR, "f_*.jpg")))
+    n = min(len(frames), len(jpgs))
+    if n == 0:
+        log.warning("pick_frame: no frames decoded (rc=%s): %s", proc.returncode,
+                    "\n".join(proc.stderr.strip().splitlines()[-6:]))
+        shutil.rmtree(_FRAMES_DIR, ignore_errors=True)
+        return False, None, None, 0
+    frames, jpgs = frames[:n], jpgs[:n]
+
+    idx, tier = _best_index(frames)
+    luma = frames[idx].get("y")
     if os.path.exists(out_path):
         os.remove(out_path)
-    cmd = [
-        FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-        "-i", seg_path,
-        "-vf", f"thumbnail={THUMB_FRAMES},scale='min({TARGET_WIDTH},iw)':-2",
-        "-frames:v", "1", "-update", "1",
-        "-q:v", str(JPEG_QUALITY), out_path,
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    ok = os.path.exists(out_path) and os.path.getsize(out_path) >= MIN_JPEG_BYTES
-    if not ok:
-        log.warning("ffmpeg thumbnail decode produced no usable frame (rc=%s): %s",
-                    proc.returncode, "\n".join(proc.stderr.strip().splitlines()[-8:]))
-    return ok
+    shutil.copy(jpgs[idx], out_path)
+    ok = os.path.getsize(out_path) >= MIN_JPEG_BYTES
+    shutil.rmtree(_FRAMES_DIR, ignore_errors=True)
+    return ok, luma, tier, n
 
 
 def process(video_id: str):
@@ -203,17 +278,20 @@ def process(video_id: str):
         fh.write(data)
     log.info("[%s] FETCH %d bytes (%.2f MB) <-- proxy GB", video_id, len(data), len(data) / 1e6)
 
-    # 3. FRAME — pick a clean representative frame; one bigger retry if needed.
-    if not decode_thumb(seg_path, out_path):
-        log.info("[%s] retry fetch at %d bytes", video_id, FETCH_RETRY)
-        data = fetch_head(fmt["url"], headers, FETCH_RETRY, proxy)
-        with open(seg_path, "wb") as fh:
-            fh.write(data)
-        log.info("[%s] FETCH(retry) %d bytes (%.2f MB)", video_id, len(data), len(data) / 1e6)
-        if not decode_thumb(seg_path, out_path):
-            raise RuntimeError("ffmpeg could not decode a frame from partial file")
+    # 3. FRAME — entropy-gated blur vote over the fetched bytes (§16): pick the sharpest
+    # high-information frame, steering off flat/black/intro frames. No big re-fetch: if the
+    # fetch decodes nothing usable we raise → SQS retry re-attempts at FETCH_BYTES, never more.
+    # tier=A means a real content frame was found; tier=B/C means the whole buffer was intro
+    # ('need more data') and we kept the best available — logged for observability.
+    ok, luma, tier, nframes = pick_frame(seg_path, out_path)
+    if not ok:
+        raise RuntimeError("could not extract a usable frame from the partial fetch")
     frame_bytes = os.path.getsize(out_path)
-    log.info("[%s] FRAME ok: %d bytes", video_id, frame_bytes)
+    dark = luma is not None and luma < DARK_YAVG
+    log.info("[%s] FRAME ok: %d bytes (tier=%s YAVG=%s%s, %d frames scanned)",
+             video_id, frame_bytes, tier,
+             f"{luma:.0f}" if luma is not None else "?",
+             " near-black" if dark else "", nframes)
 
     # 4. STORE — S3 + Dynamo.
     key = f"{video_id}.jpg"
@@ -227,14 +305,17 @@ def process(video_id: str):
     ddb.update_item(
         TableName=TABLE,
         Key={"videoId": {"S": video_id}},
-        UpdateExpression="SET thumbUrl = :u, thumbVersion = :v, thumbTs = :t, thumbHeight = :hh, #ttl = :ttl",
+        # Reset thumbAttempts on success so a healthy item stays eligible for a future
+        # FRAME_VERSION re-extract (only persistent FAILURES should accumulate to the cap).
+        UpdateExpression="SET thumbUrl = :u, thumbVersion = :v, thumbTs = :t, thumbHeight = :hh, thumbAttempts = :zero, #ttl = :ttl",
         ExpressionAttributeNames={"#ttl": "ttl"},
         ExpressionAttributeValues={
-            ":u":   {"S": thumb_url},
-            ":v":   {"S": FRAME_VERSION},
-            ":t":   {"N": str(now * 1000)},
-            ":hh":  {"N": str(fmt.get("height") or 0)},
-            ":ttl": {"N": str(now + TTL_DAYS * 86400)},
+            ":u":    {"S": thumb_url},
+            ":v":    {"S": FRAME_VERSION},
+            ":t":    {"N": str(now * 1000)},
+            ":hh":   {"N": str(fmt.get("height") or 0)},
+            ":zero": {"N": "0"},
+            ":ttl":  {"N": str(now + TTL_DAYS * 86400)},
         },
     )
     log.info("[%s] === DONE in %.1fs: s3://%s/%s (%dp, fetched %.2f MB) ===",
