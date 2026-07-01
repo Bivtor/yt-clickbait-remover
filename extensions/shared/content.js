@@ -1,4 +1,4 @@
-// De-Clickbait — content script
+// Face Value — content script
 // Collects video cards, sends ONE batch request, swaps clickbait titles + thumbnails.
 //
 // Thumbnails come from OUR server: the /titles response carries a `thumbUrl`
@@ -35,7 +35,7 @@
 
 const API_BASE = "https://u2qi2puu47.execute-api.us-west-1.amazonaws.com";
 
-console.log("[De-Clickbait] content script loaded");
+console.log("[Face Value] content script loaded");
 
 // ── Card selectors ─────────────────────────────────────────────────────────────
 // Confirmed via console on live YouTube (2024+ layout):
@@ -138,6 +138,10 @@ const GATE_CSS = `
 
 /* Toggle ON "Hide Shorts": remove Shorts shelves + recommendations across the site. */
 :root[data-dc-shorts="hide"] :is(${SHORTS_SEL}) { display: none !important; }
+
+/* Channel exceptions: a paused channel is left entirely original — our overlay frame is
+   hidden so YouTube's own thumbnail shows (title is reverted to the original in JS). */
+:root :is(${CARD_SELECTOR})[data-dc-paused] .dc-thumb-overlay { display: none !important; }
 `;
 
 function injectGateCss() {
@@ -156,25 +160,46 @@ function injectGateCss() {
 
 const titlesOn = () => document.documentElement.dataset.dcTitles !== "off";
 
+// Channel exceptions: names (lowercased) the user has paused. A paused channel's cards are
+// left entirely original — we still fetch + store the rewrite/frame so unpausing flips live.
+let pausedChannels = new Set();
+const isPaused = (creator) => !!creator && pausedChannels.has(creator.trim().toLowerCase());
+
 function applySettings(s) {
   const de = document.documentElement;
   de.dataset.dcTitles = s && s.titles     === false ? "off"  : "on";
   de.dataset.dcThumbs = s && s.thumbs     === false ? "off"  : "on";
   de.dataset.dcShorts = s && s.hideShorts === false ? "show" : "hide";
+  pausedChannels = new Set(((s && s.channels) || []).map(c => String(c).trim().toLowerCase()).filter(Boolean));
 }
 
-// Settings-aware title render: rewrite when titles are ON and we have one, else original.
+// Settings-aware title render: rewrite when titles are ON, we have one, and the channel
+// isn't paused; otherwise the original.
 function displayCardTitle(card, info) {
   info = info || getCardInfo(card);
   if (!info) return;
   const original  = card.dataset.dcOrig ?? info.originalTitle;
   const rewritten = card.dataset.dcRewritten;
-  const text = (titlesOn() && rewritten) ? rewritten : original;
-  applyTitle({ ...info, originalTitle: original }, text);
+  const show = titlesOn() && rewritten && !isPaused(card.dataset.dcCreator);
+  applyTitle({ ...info, originalTitle: original }, show ? rewritten : original);
 }
 
-function reRenderAllTitles() {
+// Re-render every card + the watch title after a settings flip: titles swap in JS, and
+// channel-pause toggles the per-card mask (thumbnails + Shorts are otherwise pure CSS).
+function reRenderAll() {
   for (const card of document.querySelectorAll(CARD_SELECTOR)) {
+    const paused = isPaused(card.dataset.dcCreator);
+    if (paused) {
+      card.dataset.dcPaused = "1";                 // CSS hides our overlay → original thumb shows
+      card.dataset.dcTitle = "";                   // reveal (displayCardTitle picks the original)
+      if (card.dataset.dcThumb === "miss" || !card.dataset.dcThumb) card.dataset.dcThumb = "orig";
+    } else if (card.dataset.dcPaused) {
+      delete card.dataset.dcPaused;                // un-paused → restore our frame if we have one
+      if (card.dataset.dcThumbUrl && card.dataset.dcThumb !== "hit") {
+        const info = getCardInfo(card);
+        if (info) showThumbHit(card, info.thumbImg, card.dataset.dcThumbUrl);
+      }
+    }
     if (card.dataset.dcRewritten) displayCardTitle(card);
   }
   reRenderWatchTitle();
@@ -185,15 +210,35 @@ function loadSettings() {
   try {
     chrome.storage.local.get("dcSettings", ({ dcSettings }) => {
       applySettings(dcSettings || {});
-      reRenderAllTitles();
+      reRenderAll();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes.dcSettings) {
         applySettings(changes.dcSettings.newValue || {});
-        reRenderAllTitles();   // titles need a JS swap; thumbnails + Shorts are pure CSS
+        reRenderAll();
       }
     });
   } catch (e) { /* storage unavailable → keep defaults */ }
+}
+
+// ── Stat counter (popup) ────────────────────────────────────────────────────────
+// Local, approximate tally of clickbait titles we've cleaned, shown in the popup. Counted
+// once per card element (a re-render/re-poll of the same card won't double-count). This is a
+// per-user client number; the real global "titles fixed" figure is a server-side TODO
+// (COUNT(*) of the titles table, or a denormalized counter refreshed on a timer).
+let statPending = 0, statTimer = null;
+function bumpStat() {
+  statPending++;
+  if (statTimer) return;
+  statTimer = setTimeout(() => {
+    statTimer = null;
+    const add = statPending; statPending = 0;
+    try {
+      chrome.storage.local.get("dcStats", ({ dcStats }) => {
+        chrome.storage.local.set({ dcStats: { titlesFixed: (dcStats?.titlesFixed || 0) + add } });
+      });
+    } catch (e) { /* storage unavailable → skip */ }
+  }, 1500);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -262,6 +307,7 @@ function showThumbHit(card, thumbImg, thumbUrl) {
     host.appendChild(overlay);
   }
   overlay.dataset.dcThumb = thumbUrl;
+  card.dataset.dcThumbUrl = thumbUrl;   // remember it so un-pausing a channel can restore the frame
   // Reveal only once the frame has actually decoded (covers the load gap cleanly).
   overlay.onload = () => {
     card.dataset.dcThumb = "hit";
@@ -329,8 +375,9 @@ function resolveCard(card, info, result) {
   // once we've waited TITLE_RELEASE_MS (still curable for a later rewrite).
   const titleHit = result.status === "hit" && !!result.rewrittenTitle;
   if (titleHit) {
+    if (!card.dataset.dcCounted) { card.dataset.dcCounted = "1"; bumpStat(); }
     card.dataset.dcRewritten = result.rewrittenTitle;   // store for instant on/off flip
-    displayCardTitle(card, info);                        // rewrite if titles ON, else original
+    displayCardTitle(card, info);                        // rewrite if titles ON + not paused, else original
     card.dataset.dcTitle = "";   // reveal
   } else if (card.dataset.dcTitle === undefined && age >= TITLE_RELEASE_MS) {
     card.dataset.dcTitle = "";   // reveal original; keep curing
@@ -344,7 +391,9 @@ function resolveCard(card, info, result) {
   if (age >= CURE_MS) {
     card.dataset.dc = "done";
     if (card.dataset.dcTitle === undefined) card.dataset.dcTitle = "";          // keep original
-    if (!result.thumbUrl && card.dataset.dcThumb !== "hit") card.dataset.dcThumb = "miss"; // black
+    // Paused channels never get the black miss cover — they stay fully original.
+    if (!result.thumbUrl && card.dataset.dcThumb !== "hit")
+      card.dataset.dcThumb = isPaused(card.dataset.dcCreator) ? "orig" : "miss";
     return false;
   }
   card.dataset.dc = "pending";
@@ -367,7 +416,15 @@ async function requestAndApply(cards) {
   for (const { card, info } of valid) {
     if (!card.dataset.dcOrig) {
       card.dataset.dcOrig = info.originalTitle;
+      card.dataset.dcCreator = info.creator || "";
       card.dataset.dcSeen = String(Date.now());
+      // Paused channel → reveal the original right away (no shimmer/mask); we still fetch
+      // below so the rewrite/frame is stored and un-pausing can flip it in instantly.
+      if (isPaused(info.creator)) {
+        card.dataset.dcPaused = "1";
+        card.dataset.dcTitle = "";
+        card.dataset.dcThumb = "orig";
+      }
     }
   }
 
@@ -460,6 +517,9 @@ function getWatchVideoId() {
 }
 
 const watchTitleEl = () => document.querySelector("ytd-watch-metadata h1 yt-formatted-string");
+const getWatchCreator = () => document.querySelector(
+  "ytd-video-owner-renderer ytd-channel-name a, ytd-channel-name#channel-name a"
+)?.textContent?.trim() || "";
 
 // The hover target + height lock live on the <h1> container (stable across renders), NOT on
 // the text element — because our cleaned title is often TALLER than the original, so swapping
@@ -476,7 +536,6 @@ function bindWatchHover(el) {
   const c = watchContainer(el);
   if (c.dataset.dcWatchBound === "1") return;
   c.dataset.dcWatchBound = "1";
-  c.style.cursor = "help";
   // Listeners on the container; look the text element up live (survives YT re-renders).
   c.addEventListener("mouseenter", () => {
     c.dataset.dcWatchHover = "1";
@@ -487,7 +546,7 @@ function bindWatchHover(el) {
   c.addEventListener("mouseleave", () => {
     c.dataset.dcWatchHover = "0";
     const cel = watchTitleEl();
-    if (!cel || !titlesOn()) return;                       // titles off → original already shown, leave it
+    if (!cel || !titlesOn() || isPaused(getWatchCreator())) return;  // off/paused → original already shown
     const e = watchTitleCache[getWatchVideoId()];
     if (e) cel.textContent = e.rewritten;
   });
@@ -499,8 +558,9 @@ function applyWatchTitle(el, videoId) {
   el.dataset.dcWatch = videoId;
   bindWatchHover(el);
   if (watchContainer(el).dataset.dcWatchHover !== "1") {   // don't clobber a hover-peek
-    // Titles ON → our cleaned title; OFF → YouTube's original (kept in the title attr).
-    el.textContent = titlesOn() ? e.rewritten : (el.getAttribute("title") || e.rewritten);
+    // Titles ON + channel not paused → our cleaned title; else YouTube's original (title attr).
+    const show = titlesOn() && !isPaused(getWatchCreator());
+    el.textContent = show ? e.rewritten : (el.getAttribute("title") || e.rewritten);
     lockWatchHeight(el);                                   // reserve the height → no snap-back on hover
   }
 }
@@ -550,6 +610,7 @@ async function processWatchTitle() {
     const { results } = await resp.json();
     const r = results?.[videoId];
     if (r && r.status === "hit" && r.rewrittenTitle) {
+      if (!watchTitleCache[videoId]) bumpStat();   // count the first time we learn this video is fixed
       watchTitleCache[videoId] = { rewritten: r.rewrittenTitle };
       applyWatchTitle(el, videoId);
       console.log(`[DC] watch title → ${JSON.stringify(r.rewrittenTitle)}`);

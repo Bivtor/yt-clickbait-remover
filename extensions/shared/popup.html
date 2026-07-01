@@ -2,60 +2,172 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: dark;
+      --accent: #E23A2E;
+      --accent-soft: rgba(226,58,46,0.10);
+      --accent-border: rgba(226,58,46,0.40);
+      --surface: #0f0f0f;
+      --off: rgba(255,255,255,0.16);
+      --hair: rgba(255,255,255,0.07);
+      --hair-soft: rgba(255,255,255,0.05);
+      --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
     body {
-      margin: 0; width: 260px;
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: #0f0f0f; color: #f1f1f1;
+      margin: 0; width: 380px;
+      font-family: var(--sans); font-size: 13px; line-height: 1.4;
+      background: var(--surface); color: #f4f4f4;
+      -webkit-font-smoothing: antialiased;
     }
-    header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 14px 16px 10px; border-bottom: 1px solid #272727;
+
+    /* header */
+    .head { display: flex; align-items: center; gap: 12px; padding: 20px 20px 18px; }
+    .mark {
+      width: 32px; height: 32px; border-radius: 23%; background: #111;
+      border: 1px solid rgba(255,255,255,0.08); flex: 0 0 auto;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
     }
-    header .dot { width: 9px; height: 9px; border-radius: 50%; background: #ff2f91; box-shadow: 0 0 6px #ff2f91aa; }
-    header h1 { margin: 0; font-size: 14px; font-weight: 600; }
-    .rows { padding: 6px 4px 10px; }
+    .mark .glyph { position: relative; width: 18px; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+    .mark .bar { height: 3.2px; border-radius: 2px; background: rgba(255,255,255,0.30); }
+    .mark .bar.a { width: 100%; }
+    .mark .bar.b { width: 68%; }
+    .mark .strike { position: absolute; top: 50%; left: -2px; width: 22px; height: 2px; border-radius: 999px; background: var(--accent); transform: translateY(-50%); }
+    .brand { flex: 1; min-width: 0; }
+    .brand .name { font-family: var(--serif); font-size: 19px; line-height: 1; color: #f4f4f4; }
+    .brand .tag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #6b6b6b; margin-top: 5px; }
+
+    /* master pill */
+    .master {
+      display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09);
+      padding: 7px 13px; border-radius: 999px; cursor: pointer; user-select: none;
+    }
+    .master .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.3); transition: background .18s ease; }
+    .master.on .dot { background: #4ea86b; }
+    .master .lbl { font-size: 12.5px; font-weight: 600; color: #e4e4e4; width: 20px; }
+
+    /* controls */
+    .controls { padding: 4px 20px 8px; }
     .row {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 11px 14px; border-radius: 8px; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 14px; padding: 16px 0;
+      cursor: pointer; user-select: none; border-top: 1px solid var(--hair-soft);
     }
-    .row:hover { background: #1c1c1c; }
-    .row .label { font-size: 13px; }
-    .row .sub { display: block; color: #9a9a9a; font-size: 11px; margin-top: 2px; }
-    /* toggle switch */
-    .switch { position: relative; width: 38px; height: 22px; flex: 0 0 auto; }
-    .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-    .track {
-      position: absolute; inset: 0; background: #4d4d4d; border-radius: 999px;
-      transition: background .18s ease;
+    .row .txt { flex: 1; }
+    .row .title { font-size: 14.5px; font-weight: 600; color: #ededed; }
+    .row .desc { font-size: 12px; color: #888; margin-top: 4px; line-height: 1.4; }
+    .sw { flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px; background: var(--off); transition: background .18s ease; position: relative; }
+    .sw .knob { position: absolute; top: 2.5px; left: 2.5px; width: 19px; height: 19px; border-radius: 50%; background: #fff; transform: translateX(0); transition: transform .18s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+    .row.on .sw { background: var(--accent); }
+    .row.on .sw .knob { transform: translateX(18px); }
+
+    /* channel exceptions */
+    .exc { margin: 4px 20px 0; padding-top: 18px; border-top: 1px solid var(--hair); }
+    .exc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .exc-head .lbl { font-family: var(--mono); font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase; color: #7a7a7a; }
+    .exc-head .count { font-size: 11.5px; color: #6b6b6b; }
+    #chan-input {
+      width: 100%; height: 40px; background: #161616; border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px; padding: 0 14px; color: #eaeaea; font: inherit; font-size: 13px;
+      outline: none; margin-bottom: 14px;
     }
-    .track::after {
-      content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
-      background: #fff; border-radius: 50%; transition: transform .18s ease;
+    #chan-input:focus { border-color: var(--accent-border); }
+    #chan-input::placeholder { color: #6b6b6b; }
+    .chips {
+      display: grid; grid-auto-flow: column; grid-template-rows: repeat(3, auto);
+      grid-auto-columns: max-content; gap: 8px; overflow-x: auto; overflow-y: hidden;
+      padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent;
     }
-    .switch input:checked + .track { background: #3ea6ff; }
-    .switch input:checked + .track::after { transform: translateX(16px); }
-    footer { padding: 8px 16px 12px; color: #6f6f6f; font-size: 10.5px; text-align: center; }
+    .chips::-webkit-scrollbar { height: 6px; }
+    .chips::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
+    .chip {
+      display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05);
+      border: 1px solid var(--hair); border-radius: 999px; padding: 5px 7px 5px 6px; white-space: nowrap;
+    }
+    .chip .ini { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; flex: 0 0 auto; }
+    .chip .nm { font-size: 12.5px; color: #d8d8d8; }
+    .chip .x { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #8a8a8a; font-size: 14px; line-height: 1; cursor: pointer; }
+    .chip .x:hover { color: #eee; background: rgba(255,255,255,0.08); }
+
+    /* donate + counter */
+    .foot { padding: 18px 20px 20px; }
+    .donate {
+      display: flex; align-items: center; justify-content: center; gap: 9px; height: 46px;
+      border-radius: 11px; background: var(--accent-soft); border: 1px solid var(--accent-border);
+      color: var(--accent); font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none;
+      transition: background .15s ease;
+    }
+    .donate:hover { background: var(--accent-border); color: #fff; }
+    .donate .heart { font-size: 15px; }
+    .counter { text-align: center; margin-top: 16px; font-size: 11.5px; color: #6b6b6b; }
+    .counter b { font-family: var(--serif); color: #b8b8b8; font-weight: 500; }
   </style>
 </head>
 <body>
-  <header><span class="dot"></span><h1>De-Clickbait</h1></header>
-  <div class="rows">
-    <label class="row" for="titles">
-      <span class="label">Replace titles<span class="sub">Swap clickbait titles for cleaned ones</span></span>
-      <span class="switch"><input type="checkbox" id="titles" checked><span class="track"></span></span>
-    </label>
-    <label class="row" for="thumbs">
-      <span class="label">Replace thumbnails<span class="sub">Use a real frame instead of the thumbnail</span></span>
-      <span class="switch"><input type="checkbox" id="thumbs" checked><span class="track"></span></span>
-    </label>
-    <label class="row" for="hideShorts">
-      <span class="label">Hide Shorts<span class="sub">Remove Shorts shelves &amp; recommendations</span></span>
-      <span class="switch"><input type="checkbox" id="hideShorts" checked><span class="track"></span></span>
-    </label>
+  <div class="head">
+    <div class="mark" aria-hidden="true">
+      <div class="glyph">
+        <div class="bar a"></div>
+        <div class="bar b"></div>
+        <div class="strike"></div>
+      </div>
+    </div>
+    <div class="brand">
+      <div class="name">Face Value</div>
+      <div class="tag">for youtube</div>
+    </div>
+    <div id="master" class="master" role="button" tabindex="0" aria-label="Toggle all">
+      <span class="dot"></span><span class="lbl" id="master-lbl">On</span>
+    </div>
   </div>
-  <footer>Changes apply instantly — no page reload</footer>
+
+  <div class="controls">
+    <div class="row" data-key="titles" role="switch" tabindex="0">
+      <div class="txt">
+        <div class="title">Clean Titles</div>
+        <div class="desc">Rewrite clickbait to what the video is actually about</div>
+      </div>
+      <div class="sw"><div class="knob"></div></div>
+    </div>
+    <div class="row" data-key="thumbs" role="switch" tabindex="0">
+      <div class="txt">
+        <div class="title">Clean Thumbnails</div>
+        <div class="desc">Swap the thumbnail for a real frame</div>
+      </div>
+      <div class="sw"><div class="knob"></div></div>
+    </div>
+    <div class="row" data-key="hideShorts" role="switch" tabindex="0">
+      <div class="txt">
+        <div class="title">Hide Shorts</div>
+        <div class="desc">Remove Shorts shelves and reels everywhere</div>
+      </div>
+      <div class="sw"><div class="knob"></div></div>
+    </div>
+  </div>
+
+  <div class="exc">
+    <div class="exc-head">
+      <div class="lbl">Channel Exceptions</div>
+      <div class="count" id="chan-count">0 paused</div>
+    </div>
+    <input id="chan-input" type="text" placeholder="Type a channel name to pause it…" autocomplete="off" spellcheck="false">
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="foot">
+    <a id="donate" class="donate" href="#" target="_blank" rel="noopener">
+      <span class="heart">♥</span>Consider Donating
+    </a>
+    <div class="counter"><b id="stat">0</b> clickbait titles fixed so far</div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- Face Value mark: rounded near-black tile, two white "title" bars, red strike-through -->
+  <rect x="4" y="4" width="88" height="88" rx="22" fill="#111111"/>
+  <rect x="4.75" y="4.75" width="86.5" height="86.5" rx="21.25" fill="none" stroke="#2a2a2a" stroke-width="1.5"/>
+  <!-- two title bars (the "headline") -->
+  <rect x="26" y="34" width="44" height="9" rx="4.5" fill="#ffffff" opacity="0.92"/>
+  <rect x="26" y="53" width="30" height="9" rx="4.5" fill="#ffffff" opacity="0.92"/>
+  <!-- the red strike: the correction -->
+  <rect x="20" y="43.5" width="56" height="9" rx="4.5" fill="#E23A2E"/>
+</svg>

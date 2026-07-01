@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "De-Clickbait",
+  "name": "Face Value",
   "version": "0.1.0",
-  "description": "Rewrites clickbait YouTube titles with accurate AI-generated ones using the video transcript.",
+  "description": "Shows YouTube for what it actually is: clickbait titles rewritten from the transcript and thumbnails swapped for a real frame.",
 
   "icons": {
     "48": "icons/icon-48.png",
@@ -13,7 +13,7 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "De-Clickbait",
+    "default_title": "Face Value",
     "default_icon": { "48": "icons/icon-48.png", "96": "icons/icon-96.png" }
   },
 
