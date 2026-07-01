@@ -12,6 +12,9 @@ Parameters:
   ProxyUrl:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /de-clickbait/proxy-url
+  FrameVersion:
+    Type: String
+    Default: '3'
 Globals:
   Function:
     Architectures:
@@ -159,11 +162,13 @@ Resources:
       Handler: index.handler
       Runtime: nodejs22.x
       Timeout: 10
-      MemorySize: 128
+      MemorySize: 512
       Environment:
         Variables:
           THUMB_QUEUE_URL:
             Ref: ThumbnailQueue
+          FRAME_VERSION:
+            Ref: FrameVersion
           NODE_OPTIONS: ' --enable-source-maps'
       Policies:
       - DynamoDBReadPolicy:
@@ -276,8 +281,11 @@ Resources:
             Ref: ProxyUrl
           YTDLP_PLAYER_CLIENT: tv_embedded
           MAX_HEIGHT: '720'
-          FETCH_BYTES: '1500000'
-          FRAME_VERSION: '2'
+          FETCH_BYTES: '200000'
+          DARK_YAVG: '16'
+          THUMB_ENTROPY_MIN: '5.0'
+          FRAME_VERSION:
+            Ref: FrameVersion
       Policies:
       - DynamoDBWritePolicy:
           TableName:

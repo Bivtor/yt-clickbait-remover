@@ -29,6 +29,7 @@ var sqs = new import_client_sqs.SQSClient({});
 var TABLE = process.env.TABLE_NAME;
 var QUEUE = process.env.QUEUE_URL;
 var THUMB_QUEUE = process.env.THUMB_QUEUE_URL;
+var FRAME_VERSION = process.env.FRAME_VERSION;
 var MAX_THUMB_ATTEMPTS = 5;
 var THUMB_COOLDOWN_MS = 30 * 60 * 1e3;
 var HEADERS = {
@@ -66,7 +67,9 @@ async function handleBatch(event) {
       } else {
         results[videoId] = { rewrittenTitle: null, status: item.status?.S ?? "pending", thumbUrl: item.thumbUrl?.S };
       }
-      if (!item.thumbUrl?.S && item.thumbStatus?.S !== "unavailable") {
+      const missingThumb = !item.thumbUrl?.S;
+      const staleThumb = !!item.thumbUrl?.S && !!FRAME_VERSION && item.thumbVersion?.S !== FRAME_VERSION;
+      if ((missingThumb || staleThumb) && item.thumbStatus?.S !== "unavailable") {
         const attempts = parseInt(item.thumbAttempts?.N ?? "0", 10);
         const lastEnq = parseInt(item.thumbEnqueuedAt?.N ?? "0", 10);
         if (attempts < MAX_THUMB_ATTEMPTS && Date.now() - lastEnq > THUMB_COOLDOWN_MS) {

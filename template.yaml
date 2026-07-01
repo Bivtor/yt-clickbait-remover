@@ -192,7 +192,7 @@ Resources:
       Handler: index.handler
       Runtime: nodejs22.x
       Timeout: 10
-      MemorySize: 128
+      MemorySize: 512   # more CPU (Lambda ties CPU to memory) → faster cold start + BatchGetItem; pennies at this volume
       Environment:
         Variables:
           THUMB_QUEUE_URL: !Ref ThumbnailQueue

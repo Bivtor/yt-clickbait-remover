@@ -28,6 +28,9 @@ External = ["@aws-sdk/*"]
 
 
 
+
+
+
 [function_build_definitions.1cd9e8d9-c92d-4361-aedc-05da9f620ffd]
 codeuri = "/Users/rinadlivictor/Documents/projects/yt-clickbait-remover/src/worker"
 runtime = "nodejs22.x"
@@ -56,11 +59,14 @@ External = ["@aws-sdk/*"]
 
 
 
-[function_build_definitions.1570ed70-9d11-4a8d-9de9-bfcb4817fff1]
+
+
+
+[function_build_definitions.68fd8fa9-fd99-4afb-a536-60fa7b17dac4]
 packagetype = "Image"
 functions = ["ThumbnailWorkerFunction"]
 
-[function_build_definitions.1570ed70-9d11-4a8d-9de9-bfcb4817fff1.metadata]
+[function_build_definitions.68fd8fa9-fd99-4afb-a536-60fa7b17dac4.metadata]
 Dockerfile = "Dockerfile"
 DockerContext = "/Users/rinadlivictor/Documents/projects/yt-clickbait-remover/src/thumbnail-worker"
 DockerTag = "latest"

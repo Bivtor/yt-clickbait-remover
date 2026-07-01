@@ -50,7 +50,9 @@ const CARD_SELECTOR = [
 ].join(", ");
 
 // Inner targets the CSS gate masks (kept in sync with getCardInfo's queries).
-const TITLE_SEL = "a.ytLockupMetadataViewModelTitle, yt-formatted-string#video-title, span#video-title";
+// Shimmer target: the INNER text span of the lockup title (hugs the text, not the wider
+// <a> block), plus the classic text elements which already are the text node.
+const TITLE_SEL = "a.ytLockupMetadataViewModelTitle > span, yt-formatted-string#video-title, span#video-title";
 const THUMB_SEL = ".ytThumbnailViewModelImage, ytd-thumbnail";
 
 // ── P0: CSS gate (injected at document_start, before first paint) ───────────────
@@ -61,33 +63,81 @@ const THUMB_SEL = ".ytThumbnailViewModelImage, ytd-thumbnail";
 // never flash their original. Robustness comes from the per-card cure deadline + an
 // AbortController fetch timeout (see below), not a session-wide failsafe.
 
+// Shorts to hide when the "Hide Shorts" toggle is on. :has() (modern browsers) makes this
+// robust across surfaces (home shelf, search/subs/watch reels, individual grid items, nav).
+const SHORTS_SEL = [
+  "ytd-reel-shelf-renderer",
+  "ytd-rich-shelf-renderer[is-shorts]",
+  'ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts])',
+  'ytd-rich-shelf-renderer:has(a[href^="/shorts/"])',
+  'ytd-rich-section-renderer:has(a[href^="/shorts/"])',
+  'ytd-rich-item-renderer:has(a[href^="/shorts/"])',
+  'ytd-video-renderer:has(a[href^="/shorts/"])',
+  'ytd-compact-video-renderer:has(a[href^="/shorts/"])',
+  'grid-shelf-view-model:has(a[href^="/shorts/"])',
+  'ytd-guide-entry-renderer:has(a[href="/shorts"])',
+  'ytd-mini-guide-entry-renderer:has(a[href="/shorts"])',
+].join(", ");
+
+// The gate rules are gated by root attributes the popup toggles set on <html>:
+//   data-dc-titles="off"  → don't mask/replace titles (show YouTube's original)
+//   data-dc-thumbs="off"  → don't mask/replace thumbnails (hide our overlay, show original)
+//   data-dc-shorts="hide" → remove Shorts shelves + recommendations
+// Defaults (attribute absent) = everything ON.
 const GATE_CSS = `
-/* TITLE — hidden until the card is marked (rewrite applied, or original released). */
-:is(${CARD_SELECTOR}):not([data-dc-title]) :is(${TITLE_SEL}) {
-  visibility: hidden !important;
+/* Subtle loading shimmer (dark theme): a soft highlight sweeping across the placeholder,
+   so a not-yet-ready card reads as "loading" instead of a dead black/blank. */
+@keyframes dc-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+/* Thumbnail variant: slower + sparse — one narrow highlight sweeps, then holds dark for
+   most of the cycle (not a constant shimmer). */
+@keyframes dc-shimmer-thumb {
+  0%   { background-position: 130% 0; }
+  35%  { background-position: -30% 0; }
+  100% { background-position: -30% 0; }
 }
 
-/* THUMB loading — neutral dark cover until we know hit vs miss (no clickbait shown). */
-:is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
+/* TITLE loading — hide the text but show a shimmering skeleton bar (not a blank line).
+   color:transparent keeps the element's geometry so the shimmer sits where the title is.
+   Disabled when titles are toggled off (original shows immediately, no mask). */
+:root:not([data-dc-titles="off"]) :is(${CARD_SELECTOR}):not([data-dc-title]) :is(${TITLE_SEL}) {
+  color: transparent !important;
+  border-radius: 4px;
+  background-image: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.11) 37%, rgba(255,255,255,0.04) 63%);
+  background-size: 200% 100%;
+  animation: dc-shimmer 1.4s ease-in-out infinite;
+}
+
+/* THUMB loading — shimmering dark cover until we know hit vs miss (no clickbait shown). */
+:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
   position: relative;
 }
-:is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
-  content: ""; position: absolute; inset: 0; background: #0f0f0f; z-index: 2; pointer-events: none;
+:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background-color: #0f0f0f;
+  background-image: linear-gradient(100deg, transparent 45%, rgba(255,255,255,0.05) 50%, transparent 55%);
+  background-size: 250% 100%;
+  animation: dc-shimmer-thumb 4.5s ease-in-out infinite;
 }
 
 /* THUMB miss — solid BLACK over the original; fades in gently on hover so the user can
    peek the original. Set only at the terminal cure deadline (a decision, not a stall). */
-:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}) {
+:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}) {
   position: relative;
 }
-:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL})::after {
+:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL})::after {
   content: ""; position: absolute; inset: 0; background: #000; z-index: 2; pointer-events: none;
   opacity: 1; transition: opacity .45s ease;
 }
-:is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}):hover::after {
+:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}):hover::after {
   opacity: 0;
 }
 /* "hit" and "orig" carry the attribute but match no ::after rule → cover gone. */
+
+/* Toggle OFF thumbnails: hide our overlay frame → YouTube's original thumbnail shows. */
+:root[data-dc-thumbs="off"] .dc-thumb-overlay { display: none !important; }
+
+/* Toggle ON "Hide Shorts": remove Shorts shelves + recommendations across the site. */
+:root[data-dc-shorts="hide"] :is(${SHORTS_SEL}) { display: none !important; }
 `;
 
 function injectGateCss() {
@@ -97,6 +147,53 @@ function injectGateCss() {
   style.textContent = GATE_CSS;
   // documentElement always exists at document_start (head/body may not yet).
   (document.head || document.documentElement).appendChild(style);
+}
+
+// ── Settings (popup toggles) ────────────────────────────────────────────────────
+// We ALWAYS fetch + store both the original and our rewrite/thumbnail, so the toggles
+// can flip live (no reload): titles swap via JS (displayCardTitle), thumbnails + Shorts
+// are pure CSS via root attributes. Defaults: everything ON.
+
+const titlesOn = () => document.documentElement.dataset.dcTitles !== "off";
+
+function applySettings(s) {
+  const de = document.documentElement;
+  de.dataset.dcTitles = s && s.titles     === false ? "off"  : "on";
+  de.dataset.dcThumbs = s && s.thumbs     === false ? "off"  : "on";
+  de.dataset.dcShorts = s && s.hideShorts === false ? "show" : "hide";
+}
+
+// Settings-aware title render: rewrite when titles are ON and we have one, else original.
+function displayCardTitle(card, info) {
+  info = info || getCardInfo(card);
+  if (!info) return;
+  const original  = card.dataset.dcOrig ?? info.originalTitle;
+  const rewritten = card.dataset.dcRewritten;
+  const text = (titlesOn() && rewritten) ? rewritten : original;
+  applyTitle({ ...info, originalTitle: original }, text);
+}
+
+function reRenderAllTitles() {
+  for (const card of document.querySelectorAll(CARD_SELECTOR)) {
+    if (card.dataset.dcRewritten) displayCardTitle(card);
+  }
+  reRenderWatchTitle();
+}
+
+function loadSettings() {
+  applySettings({});   // synchronous defaults (all ON, Shorts hidden) → no flash at document_start
+  try {
+    chrome.storage.local.get("dcSettings", ({ dcSettings }) => {
+      applySettings(dcSettings || {});
+      reRenderAllTitles();
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.dcSettings) {
+        applySettings(changes.dcSettings.newValue || {});
+        reRenderAllTitles();   // titles need a JS swap; thumbnails + Shorts are pure CSS
+      }
+    });
+  } catch (e) { /* storage unavailable → keep defaults */ }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -206,17 +303,16 @@ function applyTitle(info, rewrittenTitle) {
 // ages out. Timings are WALL-CLOCK from first-seen (deterministic regardless of how many
 // ticks fire):
 //
-//   TITLE_RELEASE_MS — a blank title line is jarring, so if no rewrite has arrived by
-//     here we reveal the ORIGINAL title (and keep curing — a later rewrite still upgrades
-//     it). A *rewrite* is the only terminal title state.
-//   CURE_MS — terminal. The thumbnail stays on the neutral loading cover the whole cure
-//     window; only here, if still no frame, does it switch to the black hover-fade miss.
-//     A *frame* is the only terminal thumb state. (THUMBNAIL_PIPELINE §15: keeps
-//     uncached infinite-scroll blocks from looking like permanent "blocks of black" —
-//     they cure to the real frame as the worker catches up, within CURE_MS.)
+//   TITLE_RELEASE_MS — the title shows a shimmer skeleton until here (short); then, if no
+//     rewrite has arrived, we reveal the ORIGINAL so it's readable fast (and keep curing —
+//     a later rewrite still upgrades it). A *rewrite* is the only terminal title state.
+//   CURE_MS — terminal. The thumbnail keeps its loading SHIMMER (and keeps polling) the
+//     whole cure window; only here, if still no frame, does it switch to the black
+//     hover-fade miss. A *frame* is the only terminal thumb state. (Longer than the title
+//     window on purpose — titles come in quick; thumbnails shimmer + poll for longer.)
 
-const TITLE_RELEASE_MS = 9000;    // reveal original title by here if no rewrite yet
-const CURE_MS          = 30000;   // give up (black thumb / keep original) past here
+const TITLE_RELEASE_MS = 2500;    // reveal original title fast if no rewrite yet (still upgrades to rewrite when it lands)
+const CURE_MS          = 45000;   // thumb keeps shimmering + polling this long before giving up to black
 const FETCH_TIMEOUT_MS = 8000;    // bound each request so a hang can't stall the lane
 
 // Resolve one card against a /titles result (or {} on miss/error). Returns true if the
@@ -233,10 +329,9 @@ function resolveCard(card, info, result) {
   // once we've waited TITLE_RELEASE_MS (still curable for a later rewrite).
   const titleHit = result.status === "hit" && !!result.rewrittenTitle;
   if (titleHit) {
-    if (result.rewrittenTitle !== original) {
-      applyTitle({ ...info, originalTitle: original }, result.rewrittenTitle);
-    }
-    card.dataset.dcTitle = "";   // reveal the rewrite
+    card.dataset.dcRewritten = result.rewrittenTitle;   // store for instant on/off flip
+    displayCardTitle(card, info);                        // rewrite if titles ON, else original
+    card.dataset.dcTitle = "";   // reveal
   } else if (card.dataset.dcTitle === undefined && age >= TITLE_RELEASE_MS) {
     card.dataset.dcTitle = "";   // reveal original; keep curing
   }
@@ -337,7 +432,7 @@ function collectAndApply(predicate) {
 
 const discover = () => collectAndApply(needsDiscovery);
 
-const CURE_INTERVAL_MS = 5000;   // ≈ the chosen decaying cadence; per-card CURE_MS caps it
+const CURE_INTERVAL_MS = 2000;   // poll cadence for cured titles/thumbs; per-card CURE_MS caps it
 let cureTimer = null;
 function ensureCureLane() {
   if (cureTimer) return;
@@ -347,16 +442,142 @@ function ensureCureLane() {
   }, CURE_INTERVAL_MS);
 }
 
+// ── Watch-page title (QOL) ─────────────────────────────────────────────────────
+// On a /watch page, show OUR cleaned title for the video being viewed; hovering the
+// title reveals the original. Client-only, reuses /titles. Separate from the card path
+// (the watch title is `ytd-watch-metadata h1 yt-formatted-string`, not a card). We only
+// ever overwrite the VISIBLE text (textContent) and leave YouTube's `title` attribute as
+// the real original — so we can always read the true original back (and hover restores it).
+
+const watchTitleCache = {};    // videoId -> { rewritten }
+const watchAttempts   = {};    // videoId -> fetch count (bounds polling for a persistent miss)
+const WATCH_MAX_ATTEMPTS = 8;
+const WATCH_MIN_REFETCH_MS = 3000;
+
+function getWatchVideoId() {
+  if (location.pathname !== "/watch") return null;
+  try { return new URL(location.href).searchParams.get("v"); } catch { return null; }
+}
+
+const watchTitleEl = () => document.querySelector("ytd-watch-metadata h1 yt-formatted-string");
+
+// The hover target + height lock live on the <h1> container (stable across renders), NOT on
+// the text element — because our cleaned title is often TALLER than the original, so swapping
+// to the shorter original on hover would shrink the box out from under the cursor and flicker.
+const watchContainer = el => el.closest("h1") || el.parentElement || el;
+
+function lockWatchHeight(el) {
+  const c = watchContainer(el);
+  c.style.minHeight = "";                        // let it size to the current (cleaned) title…
+  c.style.minHeight = c.offsetHeight + "px";     // …then pin that height so a shorter hover-title can't shrink it
+}
+
+function bindWatchHover(el) {
+  const c = watchContainer(el);
+  if (c.dataset.dcWatchBound === "1") return;
+  c.dataset.dcWatchBound = "1";
+  c.style.cursor = "help";
+  // Listeners on the container; look the text element up live (survives YT re-renders).
+  c.addEventListener("mouseenter", () => {
+    c.dataset.dcWatchHover = "1";
+    const cel = watchTitleEl();
+    const orig = cel && cel.getAttribute("title");   // YouTube keeps this = the real original
+    if (cel && orig) cel.textContent = orig;
+  });
+  c.addEventListener("mouseleave", () => {
+    c.dataset.dcWatchHover = "0";
+    const cel = watchTitleEl();
+    if (!cel || !titlesOn()) return;                       // titles off → original already shown, leave it
+    const e = watchTitleCache[getWatchVideoId()];
+    if (e) cel.textContent = e.rewritten;
+  });
+}
+
+function applyWatchTitle(el, videoId) {
+  const e = watchTitleCache[videoId];
+  if (!e) return;
+  el.dataset.dcWatch = videoId;
+  bindWatchHover(el);
+  if (watchContainer(el).dataset.dcWatchHover !== "1") {   // don't clobber a hover-peek
+    // Titles ON → our cleaned title; OFF → YouTube's original (kept in the title attr).
+    el.textContent = titlesOn() ? e.rewritten : (el.getAttribute("title") || e.rewritten);
+    lockWatchHeight(el);                                   // reserve the height → no snap-back on hover
+  }
+}
+
+// Re-apply the watch title on a settings flip (respecting titles ON/OFF).
+function reRenderWatchTitle() {
+  const vid = getWatchVideoId();
+  const el = watchTitleEl();
+  if (vid && el && watchTitleCache[vid]) applyWatchTitle(el, vid);
+}
+
+async function processWatchTitle() {
+  const videoId = getWatchVideoId();
+  if (!videoId) return;
+  const el = watchTitleEl();
+  if (!el) return;
+
+  // Already have it → (re)assert the cleaned title (cheap; re-applies if YouTube re-rendered).
+  if (watchTitleCache[videoId]) { applyWatchTitle(el, videoId); return; }
+
+  // Throttle re-fetches (the observer fires a lot on a busy watch page) + bound total tries.
+  const now = Date.now();
+  if (el.dataset.dcWatchPending === videoId) return;
+  if (now - Number(el.dataset.dcWatchLast || 0) < WATCH_MIN_REFETCH_MS) return;
+  if ((watchAttempts[videoId] || 0) >= WATCH_MAX_ATTEMPTS) return;
+
+  const original = (el.getAttribute("title") || el.textContent || "").trim();
+  if (!original) return;
+  const creator = document.querySelector(
+    "ytd-video-owner-renderer ytd-channel-name a, ytd-channel-name#channel-name a"
+  )?.textContent?.trim() || "";
+
+  el.dataset.dcWatchPending = videoId;
+  el.dataset.dcWatchLast = String(now);
+  watchAttempts[videoId] = (watchAttempts[videoId] || 0) + 1;
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    const resp = await fetch(`${API_BASE}/titles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videos: [{ videoId, title: original, creator }] }),
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(to));
+    el.dataset.dcWatchPending = "";
+    if (!resp.ok) return;
+    const { results } = await resp.json();
+    const r = results?.[videoId];
+    if (r && r.status === "hit" && r.rewrittenTitle) {
+      watchTitleCache[videoId] = { rewritten: r.rewrittenTitle };
+      applyWatchTitle(el, videoId);
+      console.log(`[DC] watch title → ${JSON.stringify(r.rewrittenTitle)}`);
+    }
+    // miss → leave YouTube's original; scheduled polls retry until cured or capped
+  } catch (e) {
+    el.dataset.dcWatchPending = "";
+  }
+}
+
+const WATCH_OFFSETS_MS = [0, 1500, 4000, 9000, 18000];   // catch-up polls after each load/nav
+let watchTimers = [];
+function scheduleWatchTitle() {
+  watchTimers.forEach(clearTimeout);
+  watchTimers = WATCH_OFFSETS_MS.map(ms => setTimeout(processWatchTitle, ms));
+}
+
 // ── Bootstrap + MutationObserver + SPA navigation ──────────────────────────────
 // run_at is document_start now, so inject the gate before YouTube paints, then watch
 // for cards. Observe documentElement (body may not exist yet at document_start).
 
 injectGateCss();
+loadSettings();   // set root toggle attributes (defaults ON) + live-update on popup changes
 
 let debounceTimer;
 const observer = new MutationObserver(() => {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(discover, 300);
+  debounceTimer = setTimeout(() => { discover(); processWatchTitle(); }, 300);
 });
 
 observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -364,6 +585,8 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 document.addEventListener("yt-navigate-finish", () => {
   clearTimeout(debounceTimer);
   discover();
+  scheduleWatchTitle();   // new video → cleaned title + hover-to-see-original
 });
 
 discover();
+scheduleWatchTitle();
