@@ -162,6 +162,10 @@ const GATE_CSS = `
    hidden so YouTube's own thumbnail shows (title is reverted to the original in JS). */
 :root :is(${CARD_SELECTOR})[data-dc-paused] .dc-thumb-overlay { display: none !important; }
 
+/* LIVE cards are left fully original — hide our frame if one was applied before the
+   LIVE badge rendered (a live stream's extracted frame is decode noise). */
+:root :is(${CARD_SELECTOR})[data-dc-live] .dc-thumb-overlay { display: none !important; }
+
 /* Watch-page title overlay. We NEVER write into YouTube's yt-formatted-string (Polymer
    owns its text node; overwriting it corrupts the next render and the title comes up
    blank on the following navigation). Instead our own span sits beside it in the <h1>
@@ -281,6 +285,26 @@ function extractVideoId(href) {
 //   holds visible text; .ytThumbnailViewModelImage img holds the thumbnail.
 // CLASSIC ytd-*: yt-formatted-string#video-title / span#video-title; ytd-thumbnail img.
 
+// ── LIVE detection ─────────────────────────────────────────────────────────────
+// Currently-LIVE cards are left entirely original: a live stream has no stable "first
+// segment", so the backend decodes noise (and the entropy vote *prefers* noise — it's
+// maximally sharp + high-entropy), producing rainbow-garbage frames. Skipping client-side
+// also means we never POST live videoIds, so no extraction is triggered while live.
+// FINISHED streams lose the badge and flow through normally. Multiple selector variants
+// (new lockup badge, avatar live ring, classic overlays/badges) so any one match works.
+const LIVE_BADGE_SEL = [
+  "badge-shape.ytBadgeShapeThumbnailLive",                              // lockup thumbnail badge
+  ".ytSpecAvatarShapeLiveBadge",                                        // lockup avatar live ring
+  'ytd-thumbnail-overlay-time-status-renderer[overlay-style="LIVE"]',   // classic thumb overlay
+  ".badge-style-type-live-now-alternate",                               // classic metadata badge
+].join(", ");
+const isLiveCard = card => {
+  try { return !!card.querySelector(LIVE_BADGE_SEL); } catch { return false; }
+};
+
+// Live watch page: the player root carries .ytp-live for live content (incl. premieres).
+const isLiveWatch = () => !!document.querySelector(".html5-video-player.ytp-live");
+
 function getCardInfo(card) {
   // Shorts use /shorts/ID links — the /watch?v= check below skips them automatically.
   const anchor = card.querySelector("a[href*='/watch?v=']");
@@ -396,6 +420,18 @@ function resolveCard(card, info, result) {
   const original = card.dataset.dcOrig ?? info.originalTitle;
   const age = Date.now() - Number(card.dataset.dcSeen || Date.now());
 
+  // Late LIVE detection: the badge can render after discovery already fetched this
+  // card. Release everything original and stop curing; data-dc-live CSS hides any
+  // overlay frame that already landed (it would be live-noise garbage).
+  if (isLiveCard(card)) {
+    card.dataset.dc = "skip";
+    card.dataset.dcLive = "1";
+    card.dataset.dcTitle = "";
+    if (card.dataset.dcThumb !== "hit") card.dataset.dcThumb = "orig";
+    if (card.dataset.dcRewritten) applyTitle({ ...info, originalTitle: original }, original);
+    return false;
+  }
+
   // THUMB — overlay our frame whenever the server has one. The card flips to
   // data-dc-thumb="hit" on the overlay's load event (so the cover holds until painted).
   if (result.thumbUrl) showThumbHit(card, info.thumbImg, result.thumbUrl);
@@ -434,12 +470,16 @@ function resolveCard(card, info, result) {
 async function requestAndApply(cards) {
   const entries = cards.map(card => ({ card, info: getCardInfo(card) }));
   // A card with no recognizable info isn't one we mask — release it fully so the gate
-  // (which only keys on our attrs) never traps a non-video element.
+  // (which only keys on our attrs) never traps a non-video element. Same for LIVE
+  // cards (left fully original; see LIVE_BADGE_SEL) — released AND excluded from the
+  // batch, so a live videoId is never sent/enqueued.
   entries.forEach(({ card, info }) => {
-    if (!info) { card.dataset.dc = "skip"; card.dataset.dcTitle = ""; card.dataset.dcThumb = "orig"; }
+    if (!info || isLiveCard(card)) {
+      card.dataset.dc = "skip"; card.dataset.dcTitle = ""; card.dataset.dcThumb = "orig";
+    }
   });
 
-  const valid = entries.filter(({ info }) => info !== null);
+  const valid = entries.filter(({ card, info }) => info !== null && card.dataset.dc !== "skip");
   if (!valid.length) return;
 
   for (const { card, info } of valid) {
@@ -639,6 +679,9 @@ async function processWatchTitle() {
   if (!videoId) return;
   const el = watchTitleEl();
   if (!el) return;
+  // Watching a live stream: don't POST its videoId (would enqueue a garbage live
+  // extraction server-side) and leave the title original. Cures post-stream.
+  if (isLiveWatch()) return;
 
   // Already have it → (re)assert the cleaned title (cheap; re-applies if YouTube re-rendered).
   if (watchTitleCache[videoId]) { applyWatchTitle(el, videoId); return; }
