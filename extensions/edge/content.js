@@ -35,7 +35,11 @@
 
 const API_BASE = "https://u2qi2puu47.execute-api.us-west-1.amazonaws.com";
 
-console.log("[Face Value] content script loaded");
+// Diagnostic logging. OFF in the shipped build; flip to true when debugging.
+const DEBUG = false;
+const dlog = (...a) => { if (DEBUG) console.log(...a); };
+
+dlog("[Face Value] content script loaded");
 
 // ── Card selectors ─────────────────────────────────────────────────────────────
 // Confirmed via console on live YouTube (2024+ layout):
@@ -291,9 +295,9 @@ function getCardInfo(card) {
 // flash, no clean→clean pop.
 
 function showThumbHit(card, thumbImg, thumbUrl) {
-  if (!thumbImg) { console.log(`[DC] showThumbHit: NO <img> element for ${thumbUrl}`); return; }
+  if (!thumbImg) { dlog(`[DC] showThumbHit: NO <img> element for ${thumbUrl}`); return; }
   const host = thumbImg.parentElement;
-  if (!host) { console.log(`[DC] showThumbHit: <img> has no parent for ${thumbUrl}`); return; }
+  if (!host) { dlog(`[DC] showThumbHit: <img> has no parent for ${thumbUrl}`); return; }
 
   let overlay = host.querySelector(":scope > img.dc-thumb-overlay");
   if (overlay && overlay.dataset.dcThumb === thumbUrl && card.dataset.dcThumb === "hit") return;
@@ -311,14 +315,14 @@ function showThumbHit(card, thumbImg, thumbUrl) {
   // Reveal only once the frame has actually decoded (covers the load gap cleanly).
   overlay.onload = () => {
     card.dataset.dcThumb = "hit";
-    console.log(`[DC] thumb hit revealed -> ${thumbUrl}`);
+    dlog(`[DC] thumb hit revealed -> ${thumbUrl}`);
   };
   // If our frame can't load (broken/expired CDN object), don't leave the card stuck on
   // the loading cover — reveal the original so it's never permanently masked.
   overlay.onerror = () => {
     overlay.remove();
     if (card.dataset.dcThumb !== "hit") card.dataset.dcThumb = "orig";
-    console.log(`[DC] thumb overlay failed to load -> ${thumbUrl} (revealing original)`);
+    dlog(`[DC] thumb overlay failed to load -> ${thumbUrl} (revealing original)`);
   };
   overlay.src = thumbUrl;
   thumbImg.dataset.dcThumb = thumbUrl;
@@ -451,12 +455,12 @@ async function requestAndApply(cards) {
     if (resp.ok) {
       ({ results } = await resp.json());
       const ids = Object.keys(results ?? {});
-      console.log(`[DC] /titles → ${ids.length} results | hits=${ids.filter(id => results[id].status === "hit").length} | withThumb=${ids.filter(id => results[id].thumbUrl).length}`);
+      dlog(`[DC] /titles → ${ids.length} results | hits=${ids.filter(id => results[id].status === "hit").length} | withThumb=${ids.filter(id => results[id].thumbUrl).length}`);
     } else {
-      console.log(`[DC] /titles HTTP ${resp.status} — will retry via cure lane`);
+      dlog(`[DC] /titles HTTP ${resp.status} — will retry via cure lane`);
     }
   } catch (e) {
-    console.log(`[DC] /titles request failed (${e.name}) — will retry via cure lane`);
+    dlog(`[DC] /titles request failed (${e.name}) — will retry via cure lane`);
   }
 
   // Apply (results===null on error → every card resolves against {} = a transient miss:
@@ -613,7 +617,7 @@ async function processWatchTitle() {
       if (!watchTitleCache[videoId]) bumpStat();   // count the first time we learn this video is fixed
       watchTitleCache[videoId] = { rewritten: r.rewrittenTitle };
       applyWatchTitle(el, videoId);
-      console.log(`[DC] watch title → ${JSON.stringify(r.rewrittenTitle)}`);
+      dlog(`[DC] watch title → ${JSON.stringify(r.rewrittenTitle)}`);
     }
     // miss → leave YouTube's original; scheduled polls retry until cured or capped
   } catch (e) {

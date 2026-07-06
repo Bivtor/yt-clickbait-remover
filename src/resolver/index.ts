@@ -38,6 +38,24 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// Abuse guard: a request full of bogus 11-char-looking IDs would enqueue an LLM title job +
+// a proxy thumb job for each novel one (the real cost vector). Only accept strings that match
+// YouTube's videoId shape, and cap how many we'll process per request. A garbage POST then
+// costs at most one cheap BatchGetItem, never a fan-out of workers.
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const MAX_VIDEOS_PER_REQUEST = 200;
+// Client-supplied title/creator become LLM prompt content and shared-cache data, so cap
+// their size (real YouTube titles are <=100 chars; a multi-KB "title" is abuse) — the
+// worker independently re-fetches the authoritative title via oEmbed before rewriting.
+const MAX_TITLE_LEN = 300;
+const MAX_CREATOR_LEN = 100;
+const isValidVideoId = (id: unknown): id is string =>
+  typeof id === "string" && VIDEO_ID_RE.test(id);
+const clip = (s: unknown, max: number): string =>
+  typeof s === "string" ? s.slice(0, max) : "";
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 // ── POST /titles — batch lookup (what the extension calls) ────────────────────
 
 interface VideoInput { videoId: string; title: string; creator: string }
@@ -50,8 +68,22 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
   } catch {
     return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "invalid JSON body" }) };
   }
-  if (!videos.length) {
+  if (!Array.isArray(videos) || !videos.length) {
     return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "videos array required" }) };
+  }
+  // Drop anything that isn't a well-formed videoId, then cap the batch. Silently ignore the
+  // rest (a legit page never sends malformed IDs; an abuser gets nothing enqueued).
+  // Title/creator are clipped, never trusted at arbitrary length.
+  videos = videos
+    .filter(v => v && isValidVideoId(v.videoId))
+    .slice(0, MAX_VIDEOS_PER_REQUEST)
+    .map(v => ({
+      videoId: v.videoId,
+      title:   clip(v.title, MAX_TITLE_LEN),
+      creator: clip(v.creator, MAX_CREATOR_LEN),
+    }));
+  if (!videos.length) {
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ results: {} }) };
   }
 
   const results: Record<string, VideoResult> = {};
@@ -60,12 +92,24 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
 
   // BatchGetItem reads up to 100 items per call
   for (const batch of chunk(videos, 100)) {
-    const res = await ddb.send(new BatchGetItemCommand({
-      RequestItems: { [TABLE]: { Keys: batch.map(v => ({ videoId: { S: v.videoId } })) } },
-    }));
+    // BatchGetItem may return partial results under throttling (UnprocessedKeys). Retry
+    // those with backoff; anything STILL unread is "unknown", NOT a miss — treating it as
+    // a miss would blind-Put a pending marker over a completed item and wipe its
+    // rewrittenTitle/thumbUrl. Unknowns just report "pending" and get re-read next poll.
+    let keys = batch.map(v => ({ videoId: { S: v.videoId } }));
+    const items = [];
+    for (let attempt = 0; attempt < 3 && keys.length; attempt++) {
+      if (attempt > 0) await sleep(50 * 2 ** attempt);
+      const res = await ddb.send(new BatchGetItemCommand({
+        RequestItems: { [TABLE]: { Keys: keys } },
+      }));
+      items.push(...(res.Responses?.[TABLE] ?? []));
+      keys = (res.UnprocessedKeys?.[TABLE]?.Keys ?? []) as typeof keys;
+    }
+    const unknown = new Set(keys.map(k => k.videoId.S!));
 
     const found = new Set<string>();
-    for (const item of res.Responses?.[TABLE] ?? []) {
+    for (const item of items) {
       const videoId = item.videoId.S!;
       found.add(videoId);
       if (item.rewrittenTitle?.S) {
@@ -91,22 +135,29 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
       }
     }
 
-    // True misses: not in DynamoDB at all
+    // True misses: not in DynamoDB at all. Unknowns (unread after retries) are NOT
+    // misses — report pending, don't enqueue, and let the next poll re-read them.
     for (const v of batch) {
-      if (!found.has(v.videoId)) {
+      if (unknown.has(v.videoId)) {
+        results[v.videoId] = { rewrittenTitle: null, status: "pending" };
+      } else if (!found.has(v.videoId)) {
         trueMisses.push(v);
         results[v.videoId] = { rewrittenTitle: null, status: "pending" };
       }
     }
   }
 
-  // Write pending markers + enqueue misses (fire-and-forget, don't block the response)
+  // Write pending markers + enqueue misses. These MUST be awaited before returning:
+  // Lambda freezes the environment as soon as the handler resolves, so un-awaited
+  // promises may run much later or never (lost enqueues, lost cooldown stamps →
+  // duplicate proxy extractions). Costs ~tens of ms on a miss; hits skip this entirely.
+  const pendingWrites: Promise<unknown>[] = [];
   if (trueMisses.length) {
     // Deduplicate (same videoId may appear in multiple page sections)
     const unique = [...new Map(trueMisses.map(v => [v.videoId, v])).values()];
 
     // BatchWriteItem — up to 25 per call
-    Promise.all(
+    pendingWrites.push(...
       chunk(unique, 25).map(batch =>
         ddb.send(new BatchWriteItemCommand({
           RequestItems: {
@@ -129,7 +180,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
     );
 
     // SQS SendMessageBatch — up to 10 per call (title queue)
-    Promise.all(
+    pendingWrites.push(...
       chunk(unique, 10).map((batch, batchIdx) =>
         sqs.send(new SendMessageBatchCommand({
           QueueUrl: QUEUE,
@@ -142,7 +193,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
     );
 
     // Thumbnail queue — separate worker, only needs the videoId
-    Promise.all(
+    pendingWrites.push(...
       chunk(unique, 10).map((batch, batchIdx) =>
         sqs.send(new SendMessageBatchCommand({
           QueueUrl: THUMB_QUEUE,
@@ -160,7 +211,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
     const unique = [...new Set(thumbReenqueue)];
 
     // Bump attempts + stamp the enqueue time (cooldown guard reads these next time).
-    Promise.all(unique.map(videoId =>
+    pendingWrites.push(...unique.map(videoId =>
       ddb.send(new UpdateItemCommand({
         TableName: TABLE,
         Key: { videoId: { S: videoId } },
@@ -169,7 +220,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
       })).catch(() => {})
     ));
 
-    Promise.all(
+    pendingWrites.push(...
       chunk(unique, 10).map((batch, batchIdx) =>
         sqs.send(new SendMessageBatchCommand({
           QueueUrl: THUMB_QUEUE,
@@ -182,6 +233,7 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
     );
   }
 
+  await Promise.all(pendingWrites);
   return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ results }) };
 }
 
@@ -189,13 +241,15 @@ async function handleBatch(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
 
 async function handleSingle(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const videoId = event.pathParameters?.videoId;
-  if (!videoId) {
-    return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "videoId required" }) };
+  if (!isValidVideoId(videoId)) {
+    return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "valid videoId required" }) };
   }
 
+  // NOTE: API Gateway v2 already URL-decodes queryStringParameters — decoding again
+  // corrupts legit %xx sequences and throws URIError on a bare "%" in the title.
   const params = event.queryStringParameters ?? {};
-  const originalTitle = params.title ? decodeURIComponent(params.title) : undefined;
-  const creator       = params.creator ? decodeURIComponent(params.creator) : undefined;
+  const originalTitle = params.title ? clip(params.title, MAX_TITLE_LEN) : undefined;
+  const creator       = params.creator ? clip(params.creator, MAX_CREATOR_LEN) : undefined;
 
   const { Item } = await ddb.send(new GetItemCommand({
     TableName: TABLE,
@@ -219,6 +273,11 @@ async function handleSingle(event: APIGatewayProxyEventV2): Promise<APIGatewayPr
           originalTitle:{ S: originalTitle },
           creator:      { S: creator },
           enqueuedAt:   { N: String(Date.now()) },
+          // Same self-heal bookkeeping as the batch path — without these the next
+          // batch view sees attempts=0/lastEnq=0 and immediately re-enqueues a
+          // duplicate thumb extraction.
+          thumbAttempts:  { N: "1" },
+          thumbEnqueuedAt:{ N: String(Date.now()) },
         },
         ConditionExpression: "attribute_not_exists(videoId)",
       }));

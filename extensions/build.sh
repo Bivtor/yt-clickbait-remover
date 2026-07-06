@@ -12,8 +12,10 @@ for BROWSER in firefox chrome edge; do
   cp "$SCRIPT_DIR/shared/content.js" "$DEST/content.js"
   cp "$SCRIPT_DIR/shared/popup.html" "$DEST/popup.html"
   cp "$SCRIPT_DIR/shared/popup.js"   "$DEST/popup.js"
-  mkdir -p "$DEST/icons"
+  cp "$SCRIPT_DIR/shared/fonts.css"  "$DEST/fonts.css"
+  mkdir -p "$DEST/icons" "$DEST/fonts"
   cp "$SCRIPT_DIR/shared/icons/"* "$DEST/icons/" 2>/dev/null || true
+  cp "$SCRIPT_DIR/shared/fonts/"* "$DEST/fonts/" 2>/dev/null || true
   echo "✓ $BROWSER"
 done
 

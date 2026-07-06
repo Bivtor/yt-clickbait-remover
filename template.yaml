@@ -2,31 +2,33 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: De-Clickbait — DynamoDB title cache + SQS processing queue + resolver + worker Lambdas
 
-# API keys are read from SSM Parameter Store at deploy time.
-# Create them once before the first deploy:
-#   aws ssm put-parameter --name /de-clickbait/transcript-api-key  --value "YOUR_KEY" --type String
-#   aws ssm put-parameter --name /de-clickbait/anthropic-api-key   --value "sk-ant-..." --type String
-#   aws ssm put-parameter --name /de-clickbait/proxy-url           --value "http://user-NAME:PASS@gate.decodo.com:7000" --type String
+# Secrets live in SSM Parameter Store as SecureString and are fetched BY THE WORKERS AT
+# RUNTIME (cold start only). Only the parameter NAMES pass through this template, so the
+# actual values never appear in CloudFormation (DescribeStacks resolves
+# AWS::SSM::Parameter::Value params to plaintext!) or as readable Lambda env vars.
+# Create/convert them once before deploying:
+#   aws ssm put-parameter --name /de-clickbait/transcript-api-key --type SecureString --overwrite --value "YOUR_KEY"
+#   aws ssm put-parameter --name /de-clickbait/anthropic-api-key  --type SecureString --overwrite --value "sk-ant-..."
+#   aws ssm put-parameter --name /de-clickbait/proxy-url          --type SecureString --overwrite --value "http://user-NAME:PASS@gate.decodo.com:7000"
 Parameters:
-  TranscriptApiKey:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /de-clickbait/transcript-api-key
-  AnthropicApiKey:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /de-clickbait/anthropic-api-key
-  # Residential proxy URL for the thumbnail worker's yt-dlp gate calls.
-  # Read from SSM (kept out of git + CLI history); create it before first deploy
-  # (see header). Decodo format: http://user-<name>:<pass>@gate.decodo.com:7000
-  ProxyUrl:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /de-clickbait/proxy-url
-  # Frame-selection heuristic version. Shared by the thumbnail worker (writes thumbVersion)
-  # AND the resolver (re-enqueues items whose thumbVersion != this, so a bump lazily
-  # re-extracts existing thumbnails as they're viewed). Bump when pick logic changes.
-  # v3 = entropy-gated blur vote (§16).
+  # Frame-selection heuristic version. Shared by the thumbnail worker (writes thumbVersion
+  # AND embeds it in the S3 object key / thumbUrl, so a bump produces a NEW CDN URL that
+  # bypasses the 180d CloudFront/browser cache) AND the resolver (re-enqueues items whose
+  # thumbVersion != this, so a bump lazily re-extracts existing thumbnails as they're
+  # viewed). Bump when pick logic changes. v3 = entropy-gated blur vote (§16).
   FrameVersion:
     Type: String
     Default: "3"
+  # Email for the monthly cost-budget alerts (the backstop that turns API abuse into an
+  # email instead of a surprise bill). Empty (default) = no budget resource created; set
+  # it via: sam deploy --parameter-overrides BudgetAlertEmail=you@example.com
+  # (kept out of samconfig.toml so the address doesn't land in the public repo).
+  BudgetAlertEmail:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasBudgetEmail: !Not [!Equals [!Ref BudgetAlertEmail, ""]]
 
 Globals:
   Function:
@@ -45,6 +47,22 @@ Resources:
   TitleApi:
     Type: AWS::Serverless::HttpApi
     Properties:
+      # Stage-wide throttle = a hard ceiling on request rate so a single abuser can't run up
+      # unbounded LLM/proxy spend by hammering /titles. HTTP APIs have no API keys/usage plans
+      # (REST-only) and WAF per-IP rules don't attach to HTTP APIs, so this global ceiling +
+      # the resolver's videoId validation + batch cap are the launch controls. Generous for
+      # real traffic (a page load is one batched request); raise if legit usage ever nears it.
+      # Per-IP protection (CloudFront+WAF rate rule, or REST migration) is the next step IF abuse
+      # actually materializes — see THUMBNAIL_PIPELINE.md "Before launch".
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 50      # steady-state req/s across ALL callers
+        ThrottlingBurstLimit: 100    # short-burst allowance
+        DetailedMetricsEnabled: true
+      # Access logs (per-request source IP + route + status) so that if abuse ever
+      # materializes there's data to design a WAF/per-IP rule from. ~free at this volume.
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","method":"$context.httpMethod","path":"$context.path","status":"$context.status","responseLength":"$context.responseLength","userAgent":"$context.identity.userAgent"}'
       CorsConfiguration:
         AllowOrigins:
           - "*"
@@ -55,9 +73,51 @@ Resources:
           - POST
           - OPTIONS
 
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /de-clickbait/api-access
+      RetentionInDays: 30
+
+  # Monthly cost ceiling → email at 80% actual and 100% forecasted. Only created when
+  # BudgetAlertEmail is set (see Parameters). This is the real abuse backstop: throttles
+  # bound the request RATE, this bounds the DOLLARS.
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudgetEmail
+    Properties:
+      Budget:
+        BudgetName: de-clickbait-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 150
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetAlertEmail
+
   # ── DynamoDB ──────────────────────────────────────────────────────────────────
   TitlesTable:
     Type: AWS::DynamoDB::Table
+    # "Keep data forever" (§6) must survive an accidental `sam delete` / resource-replacing
+    # update too — this table holds every paid-for title, not just a cache.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: de-clickbait-titles
       BillingMode: PAY_PER_REQUEST
@@ -67,25 +127,22 @@ Resources:
       KeySchema:
         - AttributeName: videoId
           KeyType: HASH
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true   # items auto-expire after 180 days (set by worker); matches S3 lifecycle
+      # No TimeToLive: cached titles/frames never go stale, so we keep them
+      # indefinitely (storage is trivial). Items are only ever overwritten, not
+      # auto-expired. (Removed 2026-06-30; workers no longer write a `ttl` attr.)
 
   # ── S3 (extracted thumbnail frames) ───────────────────────────────────────────
   # Worker extracts a frame at an arbitrary timestamp, encodes to ~40KB JPEG,
   # and stores it here as <videoId>.jpg. DynamoDB item carries the resulting URL.
-  # Lifecycle expiration matches the DynamoDB TTL (180d) so the two caches stay
-  # in sync — a frame never goes stale, expiry only bounds storage + drops
-  # deleted/privated videos.
+  # No lifecycle expiration: frames never go stale and storage is cheap, so we
+  # keep them indefinitely (kept in sync with the table, which also no longer
+  # auto-expires). Objects are only overwritten on re-extraction.
   ThumbnailBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub "de-clickbait-thumbs-${AWS::AccountId}"
-      LifecycleConfiguration:
-        Rules:
-          - Id: expire-frames-180d
-            Status: Enabled
-            ExpirationInDays: 180
 
   # ── CloudFront serving layer (thumbnail CDN) ──────────────────────────────────
   # The bucket stays PRIVATE; CloudFront reads it via Origin Access Control (OAC).
@@ -249,10 +306,18 @@ Resources:
             TableName: !Ref TitlesTable
         - SQSPollerPolicy:
             QueueName: !GetAtt ProcessingQueue.QueueName
+        # Runtime secret fetch (SecureString) — see the header note. The policy template
+        # takes the parameter name WITHOUT the leading slash.
+        - SSMParameterReadPolicy:
+            ParameterName: de-clickbait/transcript-api-key
+        - SSMParameterReadPolicy:
+            ParameterName: de-clickbait/anthropic-api-key
       Environment:
         Variables:
-          TRANSCRIPT_API_KEY: !Ref TranscriptApiKey
-          ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+          # Parameter NAMES only — the worker fetches the SecureString values at runtime,
+          # so the keys never appear in the Lambda console / GetFunctionConfiguration.
+          TRANSCRIPT_API_KEY_PARAM: /de-clickbait/transcript-api-key
+          ANTHROPIC_API_KEY_PARAM: /de-clickbait/anthropic-api-key
       Events:
         SQSTrigger:
           Type: SQS
@@ -290,7 +355,7 @@ Resources:
         Variables:
           THUMB_BUCKET: !Ref ThumbnailBucket
           THUMB_CDN_DOMAIN: !GetAtt ThumbnailDistribution.DomainName   # thumbUrl points here
-          PROXY_URL: !Ref ProxyUrl            # sticky -session-<id> is appended in code per video
+          PROXY_PARAM: /de-clickbait/proxy-url   # SecureString NAME; worker fetches the value at runtime (sticky -session-<id> appended in code per video)
           YTDLP_PLAYER_CLIENT: "tv_embedded"  # DASH <=1080p with URLs, NO PO token (§7 retest)
           MAX_HEIGHT: "720"                   # 720p is plenty for a feed card; ~half the bytes of 1080p
           FETCH_BYTES: "200000"              # ~0.2MB: §16 floor + HARD CAP on proxy bytes/extraction (no big re-fetch)
@@ -304,6 +369,8 @@ Resources:
             BucketName: !Ref ThumbnailBucket
         - SQSPollerPolicy:
             QueueName: !GetAtt ThumbnailQueue.QueueName
+        - SSMParameterReadPolicy:
+            ParameterName: de-clickbait/proxy-url
       Events:
         SQSTrigger:
           Type: SQS

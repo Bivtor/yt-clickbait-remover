@@ -58,7 +58,21 @@ TABLE          = os.environ["TABLE_NAME"]
 BUCKET         = os.environ["THUMB_BUCKET"]
 CDN_DOMAIN     = os.environ.get("THUMB_CDN_DOMAIN", "").strip()       # CloudFront; falls back to S3 URL
 REGION         = os.environ.get("AWS_REGION", "us-west-1")
-PROXY          = os.environ.get("PROXY_URL", "").strip()
+
+
+def _load_proxy() -> str:
+    """Proxy URL (residential creds) comes from SSM SecureString at runtime — only the
+    parameter NAME is in env, so the credentials never sit in CloudFormation or the
+    Lambda console. Fetched once per cold start (this worker is async; latency is free).
+    PROXY_URL env is kept as a local-testing fallback only."""
+    param = os.environ.get("PROXY_PARAM", "").strip()
+    if param:
+        ssm = boto3.client("ssm")
+        return ssm.get_parameter(Name=param, WithDecryption=True)["Parameter"]["Value"].strip()
+    return os.environ.get("PROXY_URL", "").strip()
+
+
+PROXY          = _load_proxy()
 PLAYER_CLIENT  = os.environ.get("YTDLP_PLAYER_CLIENT", "tv_embedded").strip()
 MAX_HEIGHT     = int(os.environ.get("MAX_HEIGHT", "720"))             # cap: 720p is plenty for a feed card
 FETCH_BYTES    = int(os.environ.get("FETCH_BYTES", "200000"))         # ~0.2MB: §16 floor. HARD CAP on proxy bytes/extraction — no big re-fetch.
@@ -69,7 +83,6 @@ MIN_JPEG_BYTES = int(os.environ.get("MIN_JPEG_BYTES", "2000"))        # below th
 DARK_YAVG      = float(os.environ.get("DARK_YAVG", "16"))             # mean luma below this = near-black (excluded from tier-A vote, §16)
 BRIGHT_YAVG    = float(os.environ.get("BRIGHT_YAVG", "250"))          # mean luma above this = blown white (excluded from tier-A vote)
 ENTROPY_MIN    = float(os.environ.get("THUMB_ENTROPY_MIN", "5.0"))    # min image entropy (bits) for "real content" — steers off flat/solid/intro frames (§16)
-TTL_DAYS       = int(os.environ.get("TTL_DAYS", "180"))
 FFMPEG         = "/usr/local/bin/ffmpeg"
 
 
@@ -88,18 +101,21 @@ def is_permanent(msg: str) -> bool:
 
 
 def mark_unavailable(video_id: str, reason: str):
-    now = int(time.time())
-    ddb.update_item(
-        TableName=TABLE,
-        Key={"videoId": {"S": video_id}},
-        UpdateExpression="SET thumbStatus = :s, thumbReason = :r, #ttl = :ttl",
-        ExpressionAttributeNames={"#ttl": "ttl"},
-        ExpressionAttributeValues={
-            ":s": {"S": "unavailable"},
-            ":r": {"S": reason[:200]},
-            ":ttl": {"N": str(now + TTL_DAYS * 86400)},
-        },
-    )
+    try:
+        ddb.update_item(
+            TableName=TABLE,
+            Key={"videoId": {"S": video_id}},
+            UpdateExpression="SET thumbStatus = :s, thumbReason = :r",
+            # Don't CREATE an orphan row (thumbStatus-only) if the resolver's pending
+            # write was lost — only annotate items that actually exist.
+            ConditionExpression="attribute_exists(videoId)",
+            ExpressionAttributeValues={
+                ":s": {"S": "unavailable"},
+                ":r": {"S": reason[:200]},
+            },
+        )
+    except ddb.exceptions.ConditionalCheckFailedException:
+        log.warning("[%s] mark_unavailable skipped: item does not exist", video_id)
 
 
 def proxy_with_session(base: str, session: str) -> str:
@@ -143,14 +159,29 @@ def pick_format(info: dict) -> dict:
 
 
 def fetch_head(url: str, headers: dict, nbytes: int, proxy: str) -> bytes:
-    """Range-GET the first nbytes through the proxy (requests CAN proxy https; ffmpeg can't)."""
+    """Range-GET the first nbytes through the proxy (requests CAN proxy https; ffmpeg can't).
+
+    Streamed + truncated client-side so nbytes is a REAL hard cap on proxy bytes: a server
+    that ignores the Range header (HTTP 200 = full body) would otherwise pull the whole
+    video through the residential proxy — the exact cost blowout FETCH_BYTES exists to
+    prevent — and r.content would buffer it all before we could notice."""
     h = dict(headers or {})
     h["Range"] = f"bytes=0-{nbytes - 1}"
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    r = requests.get(url, headers=h, proxies=proxies, timeout=45)
-    if r.status_code not in (200, 206):
-        raise RuntimeError(f"range fetch HTTP {r.status_code}")
-    return r.content
+    r = requests.get(url, headers=h, proxies=proxies, timeout=45, stream=True)
+    try:
+        if r.status_code not in (200, 206):
+            raise RuntimeError(f"range fetch HTTP {r.status_code}")
+        if r.status_code == 200:
+            log.warning("range header ignored (HTTP 200) — truncating stream at %d bytes", nbytes)
+        buf = bytearray()
+        for chunk in r.iter_content(chunk_size=65536):
+            buf.extend(chunk)
+            if len(buf) >= nbytes:
+                break
+        return bytes(buf[:nbytes])
+    finally:
+        r.close()
 
 
 _FRAMES_DIR = "/tmp/dc_frames"
@@ -215,7 +246,9 @@ def pick_frame(seg_path: str, out_path: str):
                f"metadata=print:file={meta}",
         "-q:v", str(JPEG_QUALITY), os.path.join(_FRAMES_DIR, "f_%05d.jpg"),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    # < the 120s Lambda timeout, so a hung ffmpeg hits THIS guard (python error path +
+    # frames-dir cleanup) instead of a hard Lambda kill.
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
 
     frames = _parse_frame_metrics(meta)
     jpgs = sorted(glob.glob(os.path.join(_FRAMES_DIR, "f_*.jpg")))
@@ -293,8 +326,13 @@ def process(video_id: str):
              f"{luma:.0f}" if luma is not None else "?",
              " near-black" if dark else "", nframes)
 
-    # 4. STORE — S3 + Dynamo.
-    key = f"{video_id}.jpg"
+    # 4. STORE — S3 + Dynamo. The FRAME_VERSION lives in the object KEY: re-extraction
+    # under a new version must produce a NEW URL, because the old one is cached for up to
+    # 180d by CloudFront AND browsers (max-age below) — rewriting the same key would make
+    # a version bump invisible for months. (Query strings won't do it: the CachingOptimized
+    # policy excludes them from the cache key.) Old-version objects are left to rot;
+    # storage is trivial (§6).
+    key = f"{video_id}.v{FRAME_VERSION}.jpg"
     with open(out_path, "rb") as fh:
         s3.put_object(Bucket=BUCKET, Key=key, Body=fh,
                       ContentType="image/jpeg",
@@ -307,15 +345,13 @@ def process(video_id: str):
         Key={"videoId": {"S": video_id}},
         # Reset thumbAttempts on success so a healthy item stays eligible for a future
         # FRAME_VERSION re-extract (only persistent FAILURES should accumulate to the cap).
-        UpdateExpression="SET thumbUrl = :u, thumbVersion = :v, thumbTs = :t, thumbHeight = :hh, thumbAttempts = :zero, #ttl = :ttl",
-        ExpressionAttributeNames={"#ttl": "ttl"},
+        UpdateExpression="SET thumbUrl = :u, thumbVersion = :v, thumbTs = :t, thumbHeight = :hh, thumbAttempts = :zero",
         ExpressionAttributeValues={
             ":u":    {"S": thumb_url},
             ":v":    {"S": FRAME_VERSION},
             ":t":    {"N": str(now * 1000)},
             ":hh":   {"N": str(fmt.get("height") or 0)},
             ":zero": {"N": "0"},
-            ":ttl":  {"N": str(now + TTL_DAYS * 86400)},
         },
     )
     log.info("[%s] === DONE in %.1fs: s3://%s/%s (%dp, fetched %.2f MB) ===",

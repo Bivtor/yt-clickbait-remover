@@ -1,0 +1,5 @@
+# Local proxy-cost test deps (see proxy_cost_test.py). Install into a venv:
+#   python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt
+yt-dlp>=2025.1.1
+requests>=2.31
+boto3>=1.34

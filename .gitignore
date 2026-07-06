@@ -1,22 +1,27 @@
-claude/*
-claude/
+# secrets / local config
 .env
-transcript-cache/
-node_modules/
 
+# dependencies / caches
+node_modules/
+transcript-cache/
+
+# build artifacts (SAM writes local absolute paths + compiled bundles here)
+.aws-sam/
+
+# internal working docs — not for the public repo
+claude/
 thoughtsformarketingsite.md
 THUMBNAIL_PIPELINE.md
-PROJECT_SUMMARY.mdtools/ab_frames/
+PROJECT_SUMMARY.md
+AUDIT_REPORT.md
+styles/
+
+# local test images (proxy-cost / frame-vote experiments)
+tools/ab_frames/
 tools/blur_vote/
 tools/blur_vote2/
-tools/ab_frames/
 
-
-.DS_STORE
+# OS noise
 .DS_Store
-
-tools
-.
-.DS_Store
-
-styles/
+__pycache__/
+*.pyc
