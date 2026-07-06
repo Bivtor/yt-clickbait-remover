@@ -32,6 +32,10 @@
 //   Hit  (cached): mask → reveal clean. True no-flash.
 //   Miss (uncached): title reveals the original; thumb blacks out (hover to peek) until
 //                    re-query/polling cures it. Never shows a clickbait *thumbnail*.
+//   Server unreachable (outage / blocked network / cert interception): cards that never
+//                    received ANY response release BOTH masks to the originals within
+//                    ~4s (FAIL_RELEASE_MS) — a degraded extension must stay usable —
+//                    and remain curable in place if the server comes back.
 
 // Custom domain in front of the API Gateway HTTP API (managed outside the SAM stack:
 // ACM cert + apigatewayv2 domain/mapping created via CLI; DNS CNAME at the registrar).
@@ -412,6 +416,7 @@ function applyTitle(info, rewrittenTitle) {
 
 const TITLE_RELEASE_MS = 2500;    // reveal original title fast if no rewrite yet (still upgrades to rewrite when it lands)
 const CURE_MS          = 45000;   // thumb keeps shimmering + polling this long before giving up to black
+const FAIL_RELEASE_MS  = 4000;    // server failing (errors/no response): unanswered cards release BOTH masks this fast
 const FETCH_TIMEOUT_MS = 8000;    // bound each request so a hang can't stall the lane
 
 // Resolve one card against a /titles result (or {} on miss/error). Returns true if the
@@ -436,6 +441,15 @@ function resolveCard(card, info, result) {
   // data-dc-thumb="hit" on the overlay's load event (so the cover holds until painted).
   if (result.thumbUrl) showThumbHit(card, info.thumbImg, result.thumbUrl);
 
+  // SERVER FAILING — this card has never received ANY response (non-200s, network
+  // errors, cert interception): release both masks fast. Nobody waits out a 45s
+  // shimmer during an outage. The card stays curable (not terminal), so if the server
+  // recovers, a later poll still upgrades the title + overlays the frame in place.
+  if (!card.dataset.dcAnswered && age >= FAIL_RELEASE_MS) {
+    if (card.dataset.dcTitle === undefined) card.dataset.dcTitle = "";
+    if (!card.dataset.dcThumb) card.dataset.dcThumb = "orig";
+  }
+
   // TITLE — a rewrite is terminal + reveals immediately; otherwise reveal the original
   // once we've waited TITLE_RELEASE_MS (still curable for a later rewrite).
   const titleHit = result.status === "hit" && !!result.rewrittenTitle;
@@ -456,9 +470,16 @@ function resolveCard(card, info, result) {
   if (age >= CURE_MS) {
     card.dataset.dc = "done";
     if (card.dataset.dcTitle === undefined) card.dataset.dcTitle = "";          // keep original
-    // Paused channels never get the black miss cover — they stay fully original.
-    if (!result.thumbUrl && card.dataset.dcThumb !== "hit")
-      card.dataset.dcThumb = isPaused(card.dataset.dcCreator) ? "orig" : "miss";
+    // Terminal thumb state depends on WHY there's no frame:
+    //   server answered for this card (dcAnswered) → genuinely processing/unavailable →
+    //     black hover-fade miss (the designed no-clickbait treatment);
+    //   server NEVER answered (outage, blocked network, cert interception) → fall back
+    //     to YouTube's original thumbnail — a degraded extension must not black out
+    //     the whole feed. Paused channels stay fully original either way.
+    if (!result.thumbUrl && card.dataset.dcThumb !== "hit") {
+      const useMiss = card.dataset.dcAnswered && !isPaused(card.dataset.dcCreator);
+      card.dataset.dcThumb = useMiss ? "miss" : "orig";
+    }
     return false;
   }
   card.dataset.dc = "pending";
@@ -519,6 +540,10 @@ async function requestAndApply(cards) {
     }).finally(() => clearTimeout(to));
     if (resp.ok) {
       ({ results } = await resp.json());
+      // Server reachability marker: these cards got a real answer at least once, so a
+      // later thumb-less deadline means "processing/unavailable" (black miss), not
+      // "server down" (fall back to original). See the CURE_MS branch in resolveCard.
+      if (results) for (const { card } of valid) card.dataset.dcAnswered = "1";
       const ids = Object.keys(results ?? {});
       dlog(`[DC] /titles → ${ids.length} results | hits=${ids.filter(id => results[id].status === "hit").length} | withThumb=${ids.filter(id => results[id].thumbUrl).length}`);
     } else {

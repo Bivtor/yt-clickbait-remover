@@ -6,8 +6,9 @@
 
 <p align="center">
   <strong>Take YouTube at face value.</strong><br />
-  A browser extension that rewrites clickbait titles from the video's actual transcript
-  and replaces engineered thumbnails with a real frame from the video.
+  A browser extension that rewrites clickbait titles from the video's actual transcript,
+  replaces engineered thumbnails with a real frame from the video, and removes Shorts
+  entirely.
 </p>
 
 <p align="center">
@@ -21,10 +22,13 @@
 Every thumbnail on YouTube is a bid for your attention, and the bids keep escalating.
 Shocked faces, red arrows, capital letters, promises the video never keeps. Even honest
 creators package good work this way, because the algorithm rewards whoever grabs
-hardest.
+hardest. And when packaging individual videos isn't enough, there's Shorts: an infinite
+scroll engineered for the dopamine hit itself, built to keep you swiping instead of
+watching anything you actually chose.
 
-Face Value takes that lever away. When every title says plainly what a video is, and
-every thumbnail is just a frame from the video, the shouting stops working.
+Face Value takes those levers away. Titles say plainly what a video is, thumbnails are
+just a frame from the video, and Shorts disappears from the site entirely. What's left
+is a feed you choose from, not one that plays you.
 
 - **Clean titles.** Rewritten from the video's transcript to say what it actually
   delivers. Hover any cleaned title to see the original.

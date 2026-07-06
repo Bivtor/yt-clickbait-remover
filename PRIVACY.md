@@ -54,9 +54,13 @@ the cached video data.
 
 - Your toggle settings (titles on/off, thumbnails on/off, hide Shorts).
 - Your channel exceptions list.
-- A local counter of titles cleaned.
+- A local tally of titles cleaned, kept as an offline fallback for the popup's counter.
 
 Uninstalling the extension deletes all of it.
+
+The counter shown in the popup is the global total of titles cleaned across all users.
+The popup fetches that single aggregate number from our API when opened; the request
+carries no data about you.
 
 ## Third-party services
 
