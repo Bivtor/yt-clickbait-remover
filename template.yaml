@@ -44,6 +44,11 @@ Globals:
 # Defined explicitly so we can attach CORS config (content scripts run on
 # youtube.com origin, so the response must include CORS headers).
 Resources:
+  # NOTE: the public face of this API is https://api.facethevalue.com — an API Gateway
+  # custom domain managed OUTSIDE this stack (one-time CLI setup: ACM cert in us-west-1
+  # + `apigatewayv2 create-domain-name` + `create-api-mapping` to this API's $default
+  # stage; CNAME lives at the domain registrar). Kept out of the template so the cert
+  # ARN/account id stay out of the repo and a plain `sam deploy` can never drop it.
   TitleApi:
     Type: AWS::Serverless::HttpApi
     Properties:

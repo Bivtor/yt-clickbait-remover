@@ -95,17 +95,17 @@
     .chip .x { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #8a8a8a; font-size: 14px; line-height: 1; cursor: pointer; }
     .chip .x:hover { color: #eee; background: rgba(255,255,255,0.08); }
 
-    /* donate + counter */
-    .foot { padding: 18px 20px 20px; }
+    /* counter + donate, one quiet row */
+    .foot { padding: 14px 20px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .donate {
-      display: flex; align-items: center; justify-content: center; gap: 9px; height: 46px;
-      border-radius: 11px; background: var(--accent-soft); border: 1px solid var(--accent-border);
-      color: var(--accent); font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px; flex-shrink: 0;
+      border-radius: 999px; background: var(--accent-soft); border: 1px solid var(--accent-border);
+      color: var(--accent); font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none;
       transition: background .15s ease;
     }
     .donate:hover { background: var(--accent-border); color: #fff; }
-    .donate .heart { font-size: 15px; }
-    .counter { text-align: center; margin-top: 16px; font-size: 11.5px; color: #6b6b6b; }
+    .donate .heart { font-size: 12px; }
+    .counter { font-size: 11.5px; color: #6b6b6b; }
     .counter b { font-family: var(--serif); color: #b8b8b8; font-weight: 500; }
   </style>
 </head>
@@ -161,10 +161,10 @@
   </div>
 
   <div class="foot">
+    <div class="counter"><b id="stat">0</b> clickbait titles fixed</div>
     <a id="donate" class="donate" href="#" target="_blank" rel="noopener">
-      <span class="heart">♥</span>Consider Donating
+      <span class="heart">♥</span>Donate
     </a>
-    <div class="counter"><b id="stat">0</b> clickbait titles fixed so far</div>
   </div>
 
   <script src="popup.js"></script>

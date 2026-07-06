@@ -15,6 +15,7 @@ THUMBNAIL_PIPELINE.md
 PROJECT_SUMMARY.md
 AUDIT_REPORT.md
 PROJECT_DEEP_DIVE.md
+STORE_SUBMISSION.md
 styles/
 
 # local test images (proxy-cost / frame-vote experiments)
@@ -26,3 +27,6 @@ tools/blur_vote2/
 .DS_Store
 __pycache__/
 *.pyc
+
+# store upload artifacts
+dist/

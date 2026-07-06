@@ -33,7 +33,9 @@
 //   Miss (uncached): title reveals the original; thumb blacks out (hover to peek) until
 //                    re-query/polling cures it. Never shows a clickbait *thumbnail*.
 
-const API_BASE = "https://u2qi2puu47.execute-api.us-west-1.amazonaws.com";
+// Custom domain in front of the API Gateway HTTP API (managed outside the SAM stack:
+// ACM cert + apigatewayv2 domain/mapping created via CLI; DNS CNAME at the registrar).
+const API_BASE = "https://api.facethevalue.com";
 
 // Diagnostic logging. OFF in the shipped build; flip to true when debugging.
 const DEBUG = false;

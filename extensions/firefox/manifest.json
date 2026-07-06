@@ -4,8 +4,11 @@
   "version": "0.1.0",
   "description": "Shows YouTube for what it actually is: clickbait titles rewritten from the transcript and thumbnails swapped for a real frame.",
   "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
-    "96": "icons/icon-96.png"
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
   },
   "content_scripts": [
     {
@@ -20,12 +23,17 @@
   ],
   "host_permissions": [
     "*://*.youtube.com/*",
-    "https://u2qi2puu47.execute-api.us-west-1.amazonaws.com/*"
+    "https://api.facethevalue.com/*"
   ],
   "browser_specific_settings": {
     "gecko": {
       "id": "facevalue@extension",
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": [
+          "websiteContent"
+        ]
+      }
     }
   },
   "permissions": [
@@ -35,8 +43,11 @@
     "default_popup": "popup.html",
     "default_title": "Face Value",
     "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
       "48": "icons/icon-48.png",
-      "96": "icons/icon-96.png"
+      "96": "icons/icon-96.png",
+      "128": "icons/icon-128.png"
     }
   },
   "homepage_url": "https://facethevalue.com"
