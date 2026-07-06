@@ -115,8 +115,10 @@ const GATE_CSS = `
 
 /* TITLE loading — hide the text but show a shimmering skeleton bar (not a blank line).
    color:transparent keeps the element's geometry so the shimmer sits where the title is.
-   Disabled when titles are toggled off (original shows immediately, no mask). */
-:root:not([data-dc-titles="off"]) :is(${CARD_SELECTOR}):not([data-dc-title]) :is(${TITLE_SEL}) {
+   Disabled when titles are toggled off (original shows immediately, no mask), and on
+   search pages (deliberately untouched — see onSearchPage; the JS never processes
+   search cards, so masking them here would strand them in the skeleton state). */
+:root:not([data-dc-titles="off"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-title]) :is(${TITLE_SEL}) {
   color: transparent !important;
   border-radius: 4px;
   background-image: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.11) 37%, rgba(255,255,255,0.04) 63%);
@@ -125,10 +127,10 @@ const GATE_CSS = `
 }
 
 /* THUMB loading — shimmering dark cover until we know hit vs miss (no clickbait shown). */
-:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
+:root:not([data-dc-thumbs="off"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
   position: relative;
 }
-:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
+:root:not([data-dc-thumbs="off"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
   background-color: #0f0f0f;
   background-image: linear-gradient(100deg, transparent 45%, rgba(255,255,255,0.05) 50%, transparent 55%);
@@ -509,7 +511,22 @@ async function requestAndApply(cards) {
 const needsDiscovery = card => !card.dataset.dcSeen && card.dataset.dc !== "skip";
 const needsCure      = card => card.dataset.dcSeen && card.dataset.dc !== "done" && card.dataset.dc !== "skip";
 
+// PRODUCT DECISION (2026-07-06): search results are deliberately untouched. Searching
+// is intentional navigation — you already know what you want — so results stay fast
+// and unmodified; the feed/sidebar is where the algorithm steers. (This started as an
+// accident of YouTube's search markup no longer matching CARD_SELECTOR; the guard
+// makes it deliberate so a future markup change can't silently re-enable it.)
+const onSearchPage = () => location.pathname === "/results";
+
+// Mirror the search-page state onto <html> so the CSS gate skips masking there too —
+// otherwise a future YouTube markup change that makes search cards match CARD_SELECTOR
+// would shimmer-mask cards the JS (guarded below) never processes or releases.
+function updatePageFlag() {
+  document.documentElement.dataset.dcPage = onSearchPage() ? "search" : "browse";
+}
+
 function collectAndApply(predicate) {
+  if (onSearchPage()) return;
   const cards = [...document.querySelectorAll(CARD_SELECTOR)].filter(predicate);
   if (cards.length) requestAndApply(cards);
 }
@@ -679,6 +696,12 @@ function scheduleWatchTitle() {
 
 injectGateCss();
 loadSettings();   // set root toggle attributes (defaults ON) + live-update on popup changes
+updatePageFlag();
+
+// Flip the search flag as early as possible on SPA navigation (start), and re-assert at
+// finish (covers redirects). Navigating ONTO search unmasks instantly; navigating OFF
+// search re-arms the gate before the new page's cards insert.
+document.addEventListener("yt-navigate-start", updatePageFlag);
 
 let debounceTimer;
 const observer = new MutationObserver(() => {
@@ -690,6 +713,7 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 
 document.addEventListener("yt-navigate-finish", () => {
   clearTimeout(debounceTimer);
+  updatePageFlag();       // authoritative (yt-navigate-start may see a stale pathname)
   discover();
   resetWatchTitle();      // drop the previous video's overlay + height lock right away
   scheduleWatchTitle();   // new video → cleaned title + hover-to-see-original
