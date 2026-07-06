@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Face Value",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Take back your attention span. Face Value removes clickbait titles and thumbnails from YouTube and hides Shorts entirely.",
   "icons": {
     "16": "icons/icon-16.png",
