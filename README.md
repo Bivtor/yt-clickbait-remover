@@ -60,7 +60,7 @@ flowchart LR
 **Titles.** A worker verifies the video via YouTube's public oEmbed API, fetches the
 transcript, and has a small LLM (Claude Haiku) rewrite the title to state what the
 video actually contains. Grounding the rewrite in the transcript is the whole trick:
-the new title describes the content, not a softened version of the hype.
+the new title describes the content, not a softened version of the creator's unrealistic title.
 
 **Thumbnails.** A containerized worker fetches only the first ~0.2 MB of the video
 stream (a Range request through a residential proxy; the whole pipeline costs
@@ -70,9 +70,8 @@ fifth of a megabyte, independent of video length.
 
 **Client.** The content script masks cards with a CSS gate injected at
 `document_start`, so the clickbait version is never painted. Results overlay YouTube's
-own elements rather than mutating them (Polymer owns its DOM; fighting it loses).
-Uncached videos resolve in a few seconds via bounded polling, and every card has a
-hard deadline, so the page never hangs on our backend.
+own elements, and uncached videos resolve in a few seconds via bounded polling. Every
+card has a hard deadline, so the page never hangs on our backend.
 
 ## Repo layout
 
