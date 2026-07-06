@@ -281,6 +281,12 @@ Resources:
             ApiId: !Ref TitleApi
             Path: /titles
             Method: POST
+        GetStats:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TitleApi
+            Path: /stats
+            Method: GET
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

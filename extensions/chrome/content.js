@@ -81,8 +81,19 @@ const SHORTS_SEL = [
   'ytd-video-renderer:has(a[href^="/shorts/"])',
   'ytd-compact-video-renderer:has(a[href^="/shorts/"])',
   'grid-shelf-view-model:has(a[href^="/shorts/"])',
+  // Sidebar "Shorts" button, expanded + collapsed ("mini") guide. YouTube has shipped
+  // this entry both WITH an href and (currently) with only a title/aria-label on the
+  // anchor, so we match every variant we've seen — CSS can't throw, and any one hit
+  // hides it. All of these re-add instantly when the toggle flips off (same standing
+  // rule as the shelves). Known gap: title/aria-label are localized, so non-Latin
+  // locales that rename "Shorts" (e.g. ja) may keep the button; href match still
+  // covers them when present.
   'ytd-guide-entry-renderer:has(a[href="/shorts"])',
+  'ytd-guide-entry-renderer:has(a[title="Shorts"])',
+  'ytd-guide-entry-renderer:has(a[aria-label="Shorts"])',
   'ytd-mini-guide-entry-renderer:has(a[href="/shorts"])',
+  'ytd-mini-guide-entry-renderer:has(a[title="Shorts"])',
+  'ytd-mini-guide-entry-renderer:has(a[aria-label="Shorts"])',
 ].join(", ");
 
 // The gate rules are gated by root attributes the popup toggles set on <html>:

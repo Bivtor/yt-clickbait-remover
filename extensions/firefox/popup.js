@@ -10,6 +10,7 @@ const TOGGLES = ["titles", "thumbs", "hideShorts"];
 const DEFAULTS = { titles: true, thumbs: true, hideShorts: true, channels: [] };
 
 const DONATE_URL = "https://facethevalue.com/support";
+const API_BASE = "https://api.facethevalue.com";
 
 // Deterministic chip color from a channel name (calm, desaturated palette from the design).
 const PALETTE = ["#3a6ea5", "#c26b2d", "#4a8a4a", "#a03a3a", "#c99a2e", "#5a5aa0", "#2f8f8f", "#8a4a8a"];
@@ -97,9 +98,19 @@ function load() {
     state = { ...DEFAULTS, ...(dcSettings || {}) };
     if (!Array.isArray(state.channels)) state.channels = [];
     render();
+    // Local tally shows instantly; the global figure replaces it when /stats answers.
     const n = (dcStats && dcStats.titlesFixed) || 0;
     document.getElementById("stat").textContent = n.toLocaleString();
   });
+  fetch(`${API_BASE}/stats`)
+    .then(r => (r.ok ? r.json() : null))
+    .then(s => {
+      const n = s && s.titlesFixed;
+      if (Number.isFinite(n) && n > 0) {
+        document.getElementById("stat").textContent = n.toLocaleString();
+      }
+    })
+    .catch(() => { /* offline / API down → local tally stands */ });
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────────

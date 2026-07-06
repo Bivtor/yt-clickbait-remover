@@ -5,6 +5,7 @@ import {
   UpdateItemCommand,
   BatchGetItemCommand,
   BatchWriteItemCommand,
+  DescribeTableCommand,
 } from "@aws-sdk/client-dynamodb";
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from "@aws-sdk/client-sqs";
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
@@ -297,9 +298,31 @@ async function handleSingle(event: APIGatewayProxyEventV2): Promise<APIGatewayPr
   return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ videoId, rewrittenTitle: null, status: "pending" }) };
 }
 
+// ── GET /stats — global "titles fixed" figure for the popup ───────────────────
+// DescribeTable's ItemCount is free and O(1); AWS refreshes it roughly every 6 hours,
+// and it counts every row (a small overcount vs. strictly-rewritten titles). That's
+// the right trade for a trust-signal number. Cached per container so popup opens
+// don't hammer DescribeTable.
+
+const STATS_TTL_MS = 5 * 60 * 1000;
+let statsCache: { count: number; at: number } | null = null;
+
+async function handleStats(): Promise<APIGatewayProxyResultV2> {
+  if (!statsCache || Date.now() - statsCache.at > STATS_TTL_MS) {
+    const res = await ddb.send(new DescribeTableCommand({ TableName: TABLE }));
+    statsCache = { count: res.Table?.ItemCount ?? 0, at: Date.now() };
+  }
+  return {
+    statusCode: 200,
+    headers: { ...HEADERS, "Cache-Control": "public, max-age=300" },
+    body: JSON.stringify({ titlesFixed: statsCache.count }),
+  };
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
   if (event.requestContext.http.method === "POST") return handleBatch(event);
+  if (event.requestContext.http.path === "/stats") return handleStats();
   return handleSingle(event);
 };
