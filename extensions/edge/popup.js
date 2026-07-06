@@ -9,8 +9,7 @@
 const TOGGLES = ["titles", "thumbs", "hideShorts"];
 const DEFAULTS = { titles: true, thumbs: true, hideShorts: true, channels: [] };
 
-// TODO: point this at the real donation link before launch.
-const DONATE_URL = "https://github.com/sponsors";
+const DONATE_URL = "https://facethevalue.com/support";
 
 // Deterministic chip color from a channel name (calm, desaturated palette from the design).
 const PALETTE = ["#3a6ea5", "#c26b2d", "#4a8a4a", "#a03a3a", "#c99a2e", "#5a5aa0", "#2f8f8f", "#8a4a8a"];

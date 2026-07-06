@@ -146,6 +146,16 @@ const GATE_CSS = `
 /* Channel exceptions: a paused channel is left entirely original — our overlay frame is
    hidden so YouTube's own thumbnail shows (title is reverted to the original in JS). */
 :root :is(${CARD_SELECTOR})[data-dc-paused] .dc-thumb-overlay { display: none !important; }
+
+/* Watch-page title overlay. We NEVER write into YouTube's yt-formatted-string (Polymer
+   owns its text node; overwriting it corrupts the next render and the title comes up
+   blank on the following navigation). Instead our own span sits beside it in the <h1>
+   and CSS swaps which one is visible. Hovering the h1 peeks YouTube's untouched
+   original. Only display:none is ever forced — the shown element renders with whatever
+   YouTube's own stylesheet says. */
+h1:not([data-dc-watch="clean"]) > .dc-watch-title { display: none !important; }
+h1[data-dc-watch="clean"]:not(:hover) > yt-formatted-string { display: none !important; }
+h1[data-dc-watch="clean"]:hover > .dc-watch-title { display: none !important; }
 `;
 
 function injectGateCss() {
@@ -506,9 +516,15 @@ function ensureCureLane() {
 // ── Watch-page title (QOL) ─────────────────────────────────────────────────────
 // On a /watch page, show OUR cleaned title for the video being viewed; hovering the
 // title reveals the original. Client-only, reuses /titles. Separate from the card path
-// (the watch title is `ytd-watch-metadata h1 yt-formatted-string`, not a card). We only
-// ever overwrite the VISIBLE text (textContent) and leave YouTube's `title` attribute as
-// the real original — so we can always read the true original back (and hover restores it).
+// (the watch title is `ytd-watch-metadata h1 yt-formatted-string`, not a card).
+//
+// Same rule as thumbnails: overlay, don't fight the owner. yt-formatted-string is a
+// Polymer component that owns its rendered text node; writing textContent into it
+// destroys that node, so on the NEXT navigation Polymer renders the new title into a
+// detached node and the h1 comes up blank (the old "every other video has no title
+// box" bug). We render into our own .dc-watch-title span instead and only ever toggle
+// visibility via the h1's data-dc-watch attribute (CSS in GATE_CSS). Hover shows
+// YouTube's element — the real original, maintained by YouTube itself.
 
 const watchTitleCache = {};    // videoId -> { rewritten }
 const watchAttempts   = {};    // videoId -> fetch count (bounds polling for a persistent miss)
@@ -536,44 +552,56 @@ function lockWatchHeight(el) {
   c.style.minHeight = c.offsetHeight + "px";     // …then pin that height so a shorter hover-title can't shrink it
 }
 
-function bindWatchHover(el) {
+// Our sibling span inside the h1. YouTube's stylesheet doesn't cover it, so we copy the
+// title typography from YouTube's own element once at creation.
+function ensureWatchOverlay(el) {
   const c = watchContainer(el);
-  if (c.dataset.dcWatchBound === "1") return;
-  c.dataset.dcWatchBound = "1";
-  // Listeners on the container; look the text element up live (survives YT re-renders).
-  c.addEventListener("mouseenter", () => {
-    c.dataset.dcWatchHover = "1";
-    const cel = watchTitleEl();
-    const orig = cel && cel.getAttribute("title");   // YouTube keeps this = the real original
-    if (cel && orig) cel.textContent = orig;
-  });
-  c.addEventListener("mouseleave", () => {
-    c.dataset.dcWatchHover = "0";
-    const cel = watchTitleEl();
-    if (!cel || !titlesOn() || isPaused(getWatchCreator())) return;  // off/paused → original already shown
-    const e = watchTitleCache[getWatchVideoId()];
-    if (e) cel.textContent = e.rewritten;
-  });
+  let ov = c.querySelector(":scope > .dc-watch-title");
+  if (!ov) {
+    ov = document.createElement("span");
+    ov.className = "dc-watch-title";
+    const cs = getComputedStyle(el);
+    for (const p of ["font-family", "font-size", "font-weight", "line-height", "letter-spacing", "color"])
+      ov.style.setProperty(p, cs.getPropertyValue(p));
+    c.appendChild(ov);
+  }
+  return ov;
 }
 
+// Sets the h1 to clean mode (our span visible, YT's element hidden) when we have a
+// rewrite and titles are on; otherwise clears the mode so YouTube's own title shows.
+// YouTube's yt-formatted-string is never written to.
 function applyWatchTitle(el, videoId) {
+  const c = watchContainer(el);
   const e = watchTitleCache[videoId];
-  if (!e) return;
-  el.dataset.dcWatch = videoId;
-  bindWatchHover(el);
-  if (watchContainer(el).dataset.dcWatchHover !== "1") {   // don't clobber a hover-peek
-    // Titles ON + channel not paused → our cleaned title; else YouTube's original (title attr).
-    const show = titlesOn() && !isPaused(getWatchCreator());
-    el.textContent = show ? e.rewritten : (el.getAttribute("title") || e.rewritten);
-    lockWatchHeight(el);                                   // reserve the height → no snap-back on hover
+  const show = e && titlesOn() && !isPaused(getWatchCreator());
+  if (!show) {
+    delete c.dataset.dcWatch;
+    return;
+  }
+  const ov = ensureWatchOverlay(el);
+  if (ov.textContent !== e.rewritten) ov.textContent = e.rewritten;
+  if (c.dataset.dcWatch !== "clean") {
+    c.dataset.dcWatch = "clean";
+    lockWatchHeight(el);                         // reserve the height → no snap-back on hover
   }
 }
 
-// Re-apply the watch title on a settings flip (respecting titles ON/OFF).
+// New video loading in the player: show YouTube's title immediately (no stale rewrite,
+// no stale min-height) until /titles answers for the new videoId.
+function resetWatchTitle() {
+  const el = watchTitleEl();
+  if (!el) return;
+  const c = watchContainer(el);
+  delete c.dataset.dcWatch;
+  c.style.minHeight = "";
+}
+
+// Re-apply the watch title on a settings flip (respecting titles ON/OFF and pauses).
 function reRenderWatchTitle() {
   const vid = getWatchVideoId();
   const el = watchTitleEl();
-  if (vid && el && watchTitleCache[vid]) applyWatchTitle(el, vid);
+  if (vid && el) applyWatchTitle(el, vid);
 }
 
 async function processWatchTitle() {
@@ -650,6 +678,7 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 document.addEventListener("yt-navigate-finish", () => {
   clearTimeout(debounceTimer);
   discover();
+  resetWatchTitle();      // drop the previous video's overlay + height lock right away
   scheduleWatchTitle();   // new video → cleaned title + hover-to-see-original
 });
 

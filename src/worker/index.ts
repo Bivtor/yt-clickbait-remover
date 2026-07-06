@@ -38,7 +38,7 @@ function getClients() {
 const systemTitleOnly = () => `\
 You de-clickbait YouTube titles. You have ONLY the original title and the channel name — no information about what the video actually contains.
 Rewrite it to be calmer and less sensational while preserving its apparent meaning.
-Rules: remove ALL-CAPS, curiosity gaps, emoji, and hype words; keep proper nouns and channel name if relevant; aim for ~6–8 words.
+Rules: remove ALL-CAPS, curiosity gaps, emoji, and hype words; keep proper nouns and channel name if relevant; aim for ~6-8 words.
 If the title is already plain, accurate, and contains no clickbait, return it in Title Case without changing any words.
 Output ONLY the rewritten title, nothing else.`;
 
@@ -146,22 +146,22 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         console.log(`∅ ${videoId}: does not exist — marked unavailable, no LLM call`);
         continue;
       }
-      const title       = oembed.title  ?? originalTitle;
+      const title = oembed.title ?? originalTitle;
       const creatorName = oembed.author ?? creator;
 
       const { anthropic, transcriptKey } = await getClients();
       const transcript = await fetchTranscript(videoId, transcriptKey);
 
-      const system  = transcript ? systemWithTranscript(today) : systemTitleOnly();
+      const system = transcript ? systemWithTranscript(today) : systemTitleOnly();
       const userMsg = transcript
         ? `Creator: ${creatorName}\nOriginal title: ${title}\n\nTranscript excerpt:\n${transcript}`
         : `Creator: ${creatorName}\nOriginal title: ${title}`;
 
       const response = await anthropic.messages.create({
-        model:      "claude-haiku-4-5",
+        model: "claude-haiku-4-5",
         max_tokens: 60,
         system,
-        messages:   [{ role: "user", content: userMsg }],
+        messages: [{ role: "user", content: userMsg }],
       });
 
       const rewrittenTitle =
@@ -179,11 +179,11 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
           "SET originalTitle = :ot, rewrittenTitle = :rt, creator = :cr, #st = :st, cachedAt = :ca",
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
-          ":ot":  { S: title },
-          ":rt":  { S: rewrittenTitle },
-          ":cr":  { S: creatorName },
-          ":st":  { S: "done" },
-          ":ca":  { N: String(Date.now()) },
+          ":ot": { S: title },
+          ":rt": { S: rewrittenTitle },
+          ":cr": { S: creatorName },
+          ":st": { S: "done" },
+          ":ca": { N: String(Date.now()) },
         },
       }));
 
