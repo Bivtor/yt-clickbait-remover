@@ -1,17 +1,9 @@
 {
-  "name": "declickbait-eval",
-  "version": "0.1.0",
+  "name": "face-value",
   "private": true,
-  "type": "module",
-  "description": "Phase 0 gate: does transcript-fed title rewriting beat title-only by enough to justify the transcript cost?",
-  "scripts": {
-    "eval": "tsx run-eval.ts"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.0"
-  },
+  "description": "Root build tooling: esbuild + typescript used by `sam build` for the TypeScript Lambdas (each Lambda's own deps live in src/*/package.json).",
   "devDependencies": {
-    "tsx": "^4.19.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.6.0"
   }
 }

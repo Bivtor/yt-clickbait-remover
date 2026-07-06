@@ -8,14 +8,9 @@ transcript-cache/
 # build artifacts (SAM writes local absolute paths + compiled bundles here)
 .aws-sam/
 
-# internal working docs — not for the public repo
+# internal working notes — not for the public repo
+notes/
 claude/
-thoughtsformarketingsite.md
-THUMBNAIL_PIPELINE.md
-PROJECT_SUMMARY.md
-AUDIT_REPORT.md
-PROJECT_DEEP_DIVE.md
-STORE_SUBMISSION.md
 styles/
 
 # local test images (proxy-cost / frame-vote experiments)
@@ -23,10 +18,10 @@ tools/ab_frames/
 tools/blur_vote/
 tools/blur_vote2/
 
+# store upload artifacts
+dist/
+
 # OS noise
 .DS_Store
 __pycache__/
 *.pyc
-
-# store upload artifacts
-dist/
