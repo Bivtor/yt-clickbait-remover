@@ -388,15 +388,16 @@ Resources:
           Properties:
             Queue: !GetAtt ThumbnailQueue.Arn
             BatchSize: 1
-            # Cap concurrent invokes from the SQS poller. Raised 5 -> 20 on 2026-07-07
-            # (applied live via update-event-source-mapping, template kept in sync):
-            # Decodo allows unlimited concurrent sessions and each invoke uses its own
-            # sticky session (distinct exit IP), so parallel hits don't correlate for
-            # YT bot walls; at 5 the queue wait dominated user-facing latency. Unlike
-            # ReservedConcurrentExecutions this does NOT reserve account concurrency,
-            # so it works on a low account limit. (Min allowed is 2.)
+            # Cap concurrent invokes from the SQS poller. THE BINDING CONSTRAINT IS THE
+            # ACCOUNT-WIDE LAMBDA CONCURRENCY LIMIT (10 as of 2026-07-07, shared with
+            # the resolver + title worker): thumb backlogs must never starve the
+            # user-facing resolver, so keep this at ~half the account limit. A quota
+            # increase to 1000 was requested 2026-07-07 (Service Quotas L-B99A9384);
+            # once granted, raise this to ~20. Proxy is NOT the constraint: Decodo
+            # allows unlimited concurrent sessions and each invoke uses its own sticky
+            # session (distinct exit IP). (Min allowed is 2.)
             ScalingConfig:
-              MaximumConcurrency: 20
+              MaximumConcurrency: 5
             FunctionResponseTypes:
               - ReportBatchItemFailures
     Metadata:
