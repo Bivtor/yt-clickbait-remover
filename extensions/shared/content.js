@@ -418,8 +418,8 @@ function applyTitle(info, rewrittenTitle) {
 
 const TITLE_RELEASE_MS = 2500;    // reveal original title fast if no rewrite yet (still upgrades to rewrite when it lands)
 const CURE_MS          = 45000;   // thumb keeps shimmering + fast-polling this long before settling to black
-const LATE_CURE_MS     = 300000;  // keep slow-polling a settled miss this long; a late frame still cures it
-const LATE_INTERVAL_MS = 20000;   // slow-lane cadence (~13 extra batched read-only polls per stubborn cohort)
+const LATE_CURE_MS     = 180000;  // keep polling a settled miss this long; a late frame still cures it
+const LATE_INTERVAL_MS = 5000;    // late-lane cadence: frames pop in within ~5s of the worker finishing (~27 extra batched read-only polls per stubborn cohort)
 const FAIL_RELEASE_MS  = 4000;    // server failing (errors/no response): unanswered cards release BOTH masks this fast
 const FETCH_TIMEOUT_MS = 8000;    // bound each request so a hang can't stall the lane
 
