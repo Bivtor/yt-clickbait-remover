@@ -388,12 +388,15 @@ Resources:
           Properties:
             Queue: !GetAtt ThumbnailQueue.Arn
             BatchSize: 1
-            # Cap concurrent invokes from the SQS poller so a burst/backlog stays polite
-            # to the residential proxy (parallel hits → proxy 5xx + YT bot walls). Unlike
-            # ReservedConcurrentExecutions this does NOT reserve account concurrency, so
-            # it works on a low account limit. (Min allowed is 2.)
+            # Cap concurrent invokes from the SQS poller. Raised 5 -> 20 on 2026-07-07
+            # (applied live via update-event-source-mapping, template kept in sync):
+            # Decodo allows unlimited concurrent sessions and each invoke uses its own
+            # sticky session (distinct exit IP), so parallel hits don't correlate for
+            # YT bot walls; at 5 the queue wait dominated user-facing latency. Unlike
+            # ReservedConcurrentExecutions this does NOT reserve account concurrency,
+            # so it works on a low account limit. (Min allowed is 2.)
             ScalingConfig:
-              MaximumConcurrency: 5
+              MaximumConcurrency: 20
             FunctionResponseTypes:
               - ReportBatchItemFailures
     Metadata:
