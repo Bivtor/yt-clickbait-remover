@@ -409,13 +409,17 @@ function applyTitle(info, rewrittenTitle) {
 //   TITLE_RELEASE_MS — the title shows a shimmer skeleton until here (short); then, if no
 //     rewrite has arrived, we reveal the ORIGINAL so it's readable fast (and keep curing —
 //     a later rewrite still upgrades it). A *rewrite* is the only terminal title state.
-//   CURE_MS — terminal. The thumbnail keeps its loading SHIMMER (and keeps polling) the
-//     whole cure window; only here, if still no frame, does it switch to the black
-//     hover-fade miss. A *frame* is the only terminal thumb state. (Longer than the title
-//     window on purpose — titles come in quick; thumbnails shimmer + poll for longer.)
+//   CURE_MS — visual settle point. The thumbnail keeps its loading SHIMMER (and keeps
+//     fast-polling) the whole cure window; here, if still no frame, it switches to the
+//     black hover-fade miss — but the card is NOT terminal yet: it moves to the LATE
+//     lane, a slow background poll, because the thumbnail worker can take minutes
+//     behind the residential proxy. A frame that lands late upgrades the miss in place.
+//   LATE_CURE_MS — terminal. If the frame still hasn't arrived, stop polling for good.
 
 const TITLE_RELEASE_MS = 2500;    // reveal original title fast if no rewrite yet (still upgrades to rewrite when it lands)
-const CURE_MS          = 45000;   // thumb keeps shimmering + polling this long before giving up to black
+const CURE_MS          = 45000;   // thumb keeps shimmering + fast-polling this long before settling to black
+const LATE_CURE_MS     = 300000;  // keep slow-polling a settled miss this long; a late frame still cures it
+const LATE_INTERVAL_MS = 20000;   // slow-lane cadence (~13 extra batched read-only polls per stubborn cohort)
 const FAIL_RELEASE_MS  = 4000;    // server failing (errors/no response): unanswered cards release BOTH masks this fast
 const FETCH_TIMEOUT_MS = 8000;    // bound each request so a hang can't stall the lane
 
@@ -468,19 +472,28 @@ function resolveCard(card, info, result) {
     return false;
   }
   if (age >= CURE_MS) {
-    card.dataset.dc = "done";
     if (card.dataset.dcTitle === undefined) card.dataset.dcTitle = "";          // keep original
-    // Terminal thumb state depends on WHY there's no frame:
+    // Settled thumb state depends on WHY there's no frame:
     //   server answered for this card (dcAnswered) → genuinely processing/unavailable →
     //     black hover-fade miss (the designed no-clickbait treatment);
     //   server NEVER answered (outage, blocked network, cert interception) → fall back
     //     to YouTube's original thumbnail — a degraded extension must not black out
     //     the whole feed. Paused channels stay fully original either way.
-    if (!result.thumbUrl && card.dataset.dcThumb !== "hit") {
+    // Settle ONCE (dcThumbSettled) so a mid-late recovery can't flash orig → miss.
+    if (!result.thumbUrl && card.dataset.dcThumb !== "hit" && !card.dataset.dcThumbSettled) {
+      card.dataset.dcThumbSettled = "1";
       const useMiss = card.dataset.dcAnswered && !isPaused(card.dataset.dcCreator);
       card.dataset.dcThumb = useMiss ? "miss" : "orig";
     }
-    return false;
+    // Not terminal yet: the worker can take minutes behind the proxy, so keep the card
+    // on the slow LATE lane — a frame that lands now still upgrades the miss in place
+    // (showThumbHit above). Terminal only at LATE_CURE_MS.
+    if (age >= LATE_CURE_MS) {
+      card.dataset.dc = "done";
+      return false;
+    }
+    card.dataset.dc = "late";
+    return true;
   }
   card.dataset.dc = "pending";
   return true;
@@ -555,12 +568,20 @@ async function requestAndApply(cards) {
 
   // Apply (results===null on error → every card resolves against {} = a transient miss:
   // it stays pending and the cure lane retries, and the CURE_MS deadline still releases it).
-  let anyPending = false;
+  // Lane cadence: fast while anything is inside its cure window; slow when only
+  // late-lane stragglers remain (their visuals are settled, we're just waiting on
+  // the worker).
+  let anyEarly = false;
+  let anyLate = false;
   for (const { card, info } of valid) {
     const result = (results && results[info.videoId]) || {};
-    if (resolveCard(card, info, result)) anyPending = true;
+    if (resolveCard(card, info, result)) {
+      if (card.dataset.dc === "late") anyLate = true;
+      else anyEarly = true;
+    }
   }
-  if (anyPending) ensureCureLane();
+  if (anyEarly) ensureCureLane();
+  else if (anyLate) ensureCureLane(LATE_INTERVAL_MS);
 }
 
 // ── P1: two-lane scheduling (discover + cure) ──────────────────────────────────
@@ -572,6 +593,9 @@ async function requestAndApply(cards) {
 //   only while such cards exist (self-stops when none). This is the bounded polling that
 //   upgrades a miss to the real frame/rewrite as the worker catches up — one batched,
 //   read-only request per tick (the resolver's re-enqueue cooldown protects the queue).
+//   Two cadences: CURE_INTERVAL_MS while any card is inside its cure window, then
+//   LATE_INTERVAL_MS while only settled late-lane cards remain (waiting out a slow
+//   thumbnail worker), until LATE_CURE_MS makes them terminal.
 
 const needsDiscovery = card => !card.dataset.dcSeen && card.dataset.dc !== "skip";
 const needsCure      = card => card.dataset.dcSeen && card.dataset.dc !== "done" && card.dataset.dc !== "skip";
@@ -598,14 +622,22 @@ function collectAndApply(predicate) {
 
 const discover = () => collectAndApply(needsDiscovery);
 
-const CURE_INTERVAL_MS = 2000;   // poll cadence for cured titles/thumbs; per-card CURE_MS caps it
+const CURE_INTERVAL_MS = 2000;   // fast poll cadence inside the cure window; per-card CURE_MS caps it
 let cureTimer = null;
-function ensureCureLane() {
-  if (cureTimer) return;
+let cureTimerSlow = false;
+function ensureCureLane(delay = CURE_INTERVAL_MS) {
+  const slow = delay > CURE_INTERVAL_MS;
+  if (cureTimer) {
+    // A fresh card deserves the fast cadence even if a slow late-lane tick is armed.
+    if (slow || !cureTimerSlow) return;
+    clearTimeout(cureTimer);
+    cureTimer = null;
+  }
+  cureTimerSlow = slow;
   cureTimer = setTimeout(() => {
     cureTimer = null;
     collectAndApply(needsCure);   // resolveCard re-arms the lane if anything is still pending
-  }, CURE_INTERVAL_MS);
+  }, delay);
 }
 
 // ── Watch-page title (QOL) ─────────────────────────────────────────────────────
