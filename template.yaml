@@ -335,6 +335,12 @@ Resources:
           Properties:
             Queue: !GetAtt ProcessingQueue.Arn
             BatchSize: 1
+            # Explicit cap added 2026-07-08 when the account limit went 10 -> 1000:
+            # before that, 10 was the de facto ceiling. Unbounded, a burst would fan
+            # out to hundreds of parallel transcript + Anthropic calls and trip their
+            # rate limits; 30 keeps bursts quick without hammering upstream APIs.
+            ScalingConfig:
+              MaximumConcurrency: 30
             FunctionResponseTypes:
               - ReportBatchItemFailures   # only failed records return to queue
     Metadata:
@@ -388,16 +394,14 @@ Resources:
           Properties:
             Queue: !GetAtt ThumbnailQueue.Arn
             BatchSize: 1
-            # Cap concurrent invokes from the SQS poller. THE BINDING CONSTRAINT IS THE
-            # ACCOUNT-WIDE LAMBDA CONCURRENCY LIMIT (10 as of 2026-07-07, shared with
-            # the resolver + title worker): thumb backlogs must never starve the
-            # user-facing resolver, so keep this at ~half the account limit. A quota
-            # increase to 1000 was requested 2026-07-07 (Service Quotas L-B99A9384);
-            # once granted, raise this to ~20. Proxy is NOT the constraint: Decodo
-            # allows unlimited concurrent sessions and each invoke uses its own sticky
-            # session (distinct exit IP). (Min allowed is 2.)
+            # Cap concurrent invokes from the SQS poller. Raised 5 -> 20 on 2026-07-08
+            # after the account concurrency quota increase (10 -> 1000) was granted.
+            # Proxy is NOT a constraint (Decodo allows unlimited concurrent sessions;
+            # each invoke uses its own sticky session = distinct exit IP). 20 clears a
+            # typical page-view burst (~20-30 thumbs) in one or two waves; beyond that
+            # is the flat part of the curve, and job time (~10-40s) is the floor.
             ScalingConfig:
-              MaximumConcurrency: 5
+              MaximumConcurrency: 20
             FunctionResponseTypes:
               - ReportBatchItemFailures
     Metadata:
