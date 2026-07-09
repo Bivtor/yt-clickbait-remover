@@ -101,10 +101,13 @@ const SHORTS_SEL = [
 ].join(", ");
 
 // The gate rules are gated by root attributes the popup toggles set on <html>:
-//   data-dc-titles="off"  → don't mask/replace titles (show YouTube's original)
-//   data-dc-thumbs="off"  → don't mask/replace thumbnails (hide our overlay, show original)
-//   data-dc-shorts="hide" → remove Shorts shelves + recommendations
-// Defaults (attribute absent) = everything ON.
+//   data-dc-titles="off"   → don't mask/replace titles (show YouTube's original)
+//   data-dc-thumbs="off"   → don't mask/replace thumbnails (hide our overlay, show original)
+//   data-dc-shorts="hide"  → remove Shorts shelves + recommendations
+//   data-dc-loading="orig" → show the ORIGINAL thumbnail while ours loads (no dark
+//                            cover, no black miss); "cover" = the old shimmer/black
+//                            treatment. Titles keep their skeleton either way.
+// Defaults (attribute absent) = everything ON (and loading = "orig").
 const GATE_CSS = `
 /* Subtle loading shimmer (dark theme): a soft highlight sweeping across the placeholder,
    so a not-yet-ready card reads as "loading" instead of a dead black/blank. */
@@ -130,11 +133,13 @@ const GATE_CSS = `
   animation: dc-shimmer 1.4s ease-in-out infinite;
 }
 
-/* THUMB loading — shimmering dark cover until we know hit vs miss (no clickbait shown). */
-:root:not([data-dc-thumbs="off"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
+/* THUMB loading — shimmering dark cover until we know hit vs miss (no clickbait shown).
+   Skipped entirely under data-dc-loading="orig" (the default): the original thumbnail
+   stays visible until our frame overlays it. */
+:root:not([data-dc-thumbs="off"]):not([data-dc-loading="orig"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL}) {
   position: relative;
 }
-:root:not([data-dc-thumbs="off"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
+:root:not([data-dc-thumbs="off"]):not([data-dc-loading="orig"]):not([data-dc-page="search"]) :is(${CARD_SELECTOR}):not([data-dc-thumb]) :is(${THUMB_SEL})::after {
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
   background-color: #0f0f0f;
   background-image: linear-gradient(100deg, transparent 45%, rgba(255,255,255,0.05) 50%, transparent 55%);
@@ -143,15 +148,17 @@ const GATE_CSS = `
 }
 
 /* THUMB miss — solid BLACK over the original; fades in gently on hover so the user can
-   peek the original. Set only at the terminal cure deadline (a decision, not a stall). */
-:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}) {
+   peek the original. Set only at the terminal cure deadline (a decision, not a stall).
+   Also skipped under data-dc-loading="orig": a miss just keeps the original thumbnail
+   (the JS still marks "miss", so flipping the toggle re-blacks these live). */
+:root:not([data-dc-thumbs="off"]):not([data-dc-loading="orig"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}) {
   position: relative;
 }
-:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL})::after {
+:root:not([data-dc-thumbs="off"]):not([data-dc-loading="orig"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL})::after {
   content: ""; position: absolute; inset: 0; background: #000; z-index: 2; pointer-events: none;
   opacity: 1; transition: opacity .45s ease;
 }
-:root:not([data-dc-thumbs="off"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}):hover::after {
+:root:not([data-dc-thumbs="off"]):not([data-dc-loading="orig"]) :is(${CARD_SELECTOR})[data-dc-thumb="miss"] :is(${THUMB_SEL}):hover::after {
   opacity: 0;
 }
 /* "hit" and "orig" carry the attribute but match no ::after rule → cover gone. */
@@ -205,8 +212,9 @@ const isPaused = (creator) => !!creator && pausedChannels.has(creator.trim().toL
 function applySettings(s) {
   const de = document.documentElement;
   de.dataset.dcTitles = s && s.titles     === false ? "off"  : "on";
-  de.dataset.dcThumbs = s && s.thumbs     === false ? "off"  : "on";
-  de.dataset.dcShorts = s && s.hideShorts === false ? "show" : "hide";
+  de.dataset.dcThumbs  = s && s.thumbs     === false ? "off"   : "on";
+  de.dataset.dcShorts  = s && s.hideShorts === false ? "show"  : "hide";
+  de.dataset.dcLoading = s && s.loadOrig   === false ? "cover" : "orig";
   pausedChannels = new Set(((s && s.channels) || []).map(c => String(c).trim().toLowerCase()).filter(Boolean));
 }
 

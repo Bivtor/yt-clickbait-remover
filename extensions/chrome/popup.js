@@ -1,13 +1,16 @@
 // Face Value popup.
-// Persists `dcSettings` = { titles, thumbs, hideShorts, channels[] } to chrome.storage.local.
+// Persists `dcSettings` = { titles, thumbs, loadOrig, hideShorts, channels[] } to chrome.storage.local.
 // The content script reads the same object and reacts live (no page reload):
 //   - titles/thumbs/hideShorts flip the feed instantly
 //   - channels[] is the "Channel Exceptions" pause list (case-insensitive channel names)
 // It also reads `dcStats.titlesFixed` for the counter (a local, approximate tally the
 // content script increments as it cleans titles).
 
-const TOGGLES = ["titles", "thumbs", "hideShorts"];
-const DEFAULTS = { titles: true, thumbs: true, hideShorts: true, channels: [] };
+const TOGGLES = ["titles", "thumbs", "loadOrig", "hideShorts"];
+// The master switch only cycles the FEATURE toggles; loadOrig is a preference about
+// HOW thumbnails load, so an all-off/all-on master flip leaves it alone.
+const MASTER_TOGGLES = ["titles", "thumbs", "hideShorts"];
+const DEFAULTS = { titles: true, thumbs: true, loadOrig: true, hideShorts: true, channels: [] };
 
 const DONATE_URL = "https://facethevalue.com/support";
 const API_BASE = "https://api.facethevalue.com";
@@ -29,8 +32,8 @@ function render() {
     row.classList.toggle("on", !!state[key]);
     row.setAttribute("aria-checked", state[key] ? "true" : "false");
   }
-  // master = on if anything is on
-  const anyOn = TOGGLES.some(k => state[k]);
+  // master = on if any feature is on
+  const anyOn = MASTER_TOGGLES.some(k => state[k]);
   const master = document.getElementById("master");
   master.classList.toggle("on", anyOn);
   document.getElementById("master-lbl").textContent = anyOn ? "On" : "Off";
@@ -71,9 +74,9 @@ function setToggle(key) {
 }
 
 function setMaster() {
-  const anyOn = TOGGLES.some(k => state[k]);
+  const anyOn = MASTER_TOGGLES.some(k => state[k]);
   const next = !anyOn;                       // all-off → all-on, otherwise all-off
-  for (const k of TOGGLES) state[k] = next;
+  for (const k of MASTER_TOGGLES) state[k] = next;
   render();
   save();
 }
