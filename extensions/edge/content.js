@@ -622,7 +622,7 @@ function collectAndApply(predicate) {
 
 const discover = () => collectAndApply(needsDiscovery);
 
-const CURE_INTERVAL_MS = 2000;   // fast poll cadence inside the cure window; per-card CURE_MS caps it
+const CURE_INTERVAL_MS = 1000;   // fast poll cadence inside the cure window; per-card CURE_MS caps it (1s on this branch to test the full effect)
 let cureTimer = null;
 let cureTimerSlow = false;
 function ensureCureLane(delay = CURE_INTERVAL_MS) {
