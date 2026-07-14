@@ -83,6 +83,13 @@ MIN_JPEG_BYTES = int(os.environ.get("MIN_JPEG_BYTES", "2000"))        # below th
 DARK_YAVG      = float(os.environ.get("DARK_YAVG", "16"))             # mean luma below this = near-black (excluded from tier-A vote, §16)
 BRIGHT_YAVG    = float(os.environ.get("BRIGHT_YAVG", "250"))          # mean luma above this = blown white (excluded from tier-A vote)
 ENTROPY_MIN    = float(os.environ.get("THUMB_ENTROPY_MIN", "5.0"))    # min image entropy (bits) for "real content" — steers off flat/solid/intro frames (§16)
+# Frame-vote compute cap (VPS lane): score every Nth frame across the WHOLE buffer,
+# max M scored — same coverage, bounded CPU. Defaults (1/0) = legacy behavior (Lambda).
+FRAME_STRIDE   = int(os.environ.get("FRAME_STRIDE", "1"))             # score every Nth decoded frame
+FRAME_MAX      = int(os.environ.get("FRAME_MAX_SCORED", "0"))         # hard cap on scored frames (0 = unlimited)
+# NOTE: no player_skip support on purpose. It looks like a free 1-2 RTT saving and
+# is clean through the yt-dlp CLI, but through the Python library (what this worker
+# uses) it gets bot-challenged 3/3 (2026-07-15, see notes/SPEND_SOLUTIONS.md gotcha).
 FFMPEG         = "/usr/local/bin/ffmpeg"
 
 
@@ -240,12 +247,18 @@ def pick_frame(seg_path: str, out_path: str):
     meta = os.path.join(_FRAMES_DIR, "m.txt")
     # blurdetect+entropy+signalstats compute metrics on the full-res frame; scale is for the
     # written JPEG only; metadata=print emits per-frame metrics aligned with the f_%05d.jpg.
+    sample = f"select=not(mod(n\\,{FRAME_STRIDE}))," if FRAME_STRIDE > 1 else ""
     cmd = [
         FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-i", seg_path,
-        "-vf", f"blurdetect,entropy,signalstats,scale='min({TARGET_WIDTH},iw)':-2,"
+        "-vf", f"{sample}blurdetect,entropy,signalstats,scale='min({TARGET_WIDTH},iw)':-2,"
                f"metadata=print:file={meta}",
-        "-q:v", str(JPEG_QUALITY), os.path.join(_FRAMES_DIR, "f_%05d.jpg"),
+        # vfr: emit each selected frame once (without it, image2 duplicates frames
+        # to fill the timestamp gaps select leaves, undoing the sampling win).
+        "-fps_mode", "vfr",
     ]
+    if FRAME_MAX > 0:
+        cmd += ["-frames:v", str(FRAME_MAX)]
+    cmd += ["-q:v", str(JPEG_QUALITY), os.path.join(_FRAMES_DIR, "f_%05d.jpg")]
     # < the 120s Lambda timeout, so a hung ffmpeg hits THIS guard (python error path +
     # frames-dir cleanup) instead of a hard Lambda kill.
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)

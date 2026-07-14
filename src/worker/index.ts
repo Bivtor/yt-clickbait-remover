@@ -1,7 +1,9 @@
 import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import Anthropic from "@anthropic-ai/sdk";
+import * as https from "node:https";
 import type { SQSEvent, SQSBatchResponse } from "aws-lambda";
+import { VPS_CAPTIONS_CA } from "./vps-ca";
 
 const ddb = new DynamoDBClient({});
 const ssm = new SSMClient({});
@@ -14,19 +16,22 @@ const ssm = new SSMClient({});
 // actual secrets never appear in CloudFormation, the Lambda console, or
 // GetFunctionConfiguration. Fetched once per cold start; a failed fetch is retried
 // on the next invocation (the cached promise is cleared on rejection).
-let clientsPromise: Promise<{ anthropic: Anthropic; transcriptKey: string; geminiKey: string }> | null = null;
+let clientsPromise: Promise<{ anthropic: Anthropic; transcriptKey: string; geminiKey: string; captionToken: string }> | null = null;
 function getClients() {
   if (!clientsPromise) {
     const p = (async () => {
       const get = async (name: string) =>
         (await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true })))
           .Parameter!.Value!;
-      const [anthropicKey, transcriptKey, geminiKey] = await Promise.all([
+      const [anthropicKey, transcriptKey, geminiKey, captionToken] = await Promise.all([
         get(process.env.ANTHROPIC_API_KEY_PARAM!),
         get(process.env.TRANSCRIPT_API_KEY_PARAM!),
         get(process.env.GEMINI_API_KEY_PARAM!),
+        // Optional: absent env var = VPS caption lane off, paid API only.
+        process.env.CAPTION_SERVICE_TOKEN_PARAM
+          ? get(process.env.CAPTION_SERVICE_TOKEN_PARAM) : Promise.resolve(""),
       ]);
-      return { anthropic: new Anthropic({ apiKey: anthropicKey }), transcriptKey, geminiKey };
+      return { anthropic: new Anthropic({ apiKey: anthropicKey }), transcriptKey, geminiKey, captionToken };
     })();
     p.catch(() => { if (clientsPromise === p) clientsPromise = null; });
     clientsPromise = p;
@@ -176,7 +181,60 @@ async function markVideoUnavailable(videoId: string, reason: string) {
   }));
 }
 
-async function fetchTranscript(videoId: string, apiKey: string): Promise<string | null> {
+// ── Captions: VPS service first (flat-cost), paid API as fallback ───────────────
+// Model B lane (notes/SPEND_SOLUTIONS.md): the VPS only does the one thing Lambda
+// can't — fetch YouTube captions from a clean IP. Step-0 validated that the
+// auto-caption text matches the paid API word-for-word (it resells YouTube's own
+// ASR), so any non-200/timeout here degrades to a COST regression, never a worse
+// title. The endpoint is a bare IP with a pinned self-signed cert (src/worker/
+// vps-ca.ts) — no DNS or public CA in the loop.
+function vpsGet(
+  url: string, headers: Record<string, string>, timeoutMs: number,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { headers, ca: VPS_CAPTIONS_CA, timeout: timeoutMs }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    // Inactivity timeout doubles as the total budget: the service sends nothing
+    // until its android→ios retry ladder resolves, so a slow ladder trips this
+    // and we move on to the paid API within the invocation's time budget.
+    req.on("timeout", () => req.destroy(new Error(`caption service timeout after ${timeoutMs}ms`)));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function fetchTranscript(
+  videoId: string, apiKey: string, captionToken: string,
+): Promise<string | null> {
+  if (process.env.CAPTION_SERVICE_URL && captionToken) {
+    try {
+      const { status, body } = await vpsGet(
+        `${process.env.CAPTION_SERVICE_URL}/captions?v=${videoId}`,
+        { authorization: `Bearer ${captionToken}` }, 20_000,
+      );
+      if (status === 200) {
+        const text = ((JSON.parse(body) as { text?: string }).text ?? "").trim();
+        if (text) {
+          console.log(`[captions:vps] ${videoId}`);
+          return text.split(/\s+/).slice(0, 3000).join(" ");
+        }
+      }
+      // 404 no_captions / 503 busy / 5xx → paid API decides for itself below.
+    } catch (err) {
+      console.warn(`caption service unavailable, trying paid API: ${err}`);
+    }
+  }
+  const paid = await fetchTranscriptPaid(videoId, apiKey);
+  // [captions:paid] is the fallback-rate signal (rollout gate: < ~20%); a
+  // sustained spike means the VPS lane is sick while cures still work.
+  console.log(`[captions:${paid ? "paid" : "none"}] ${videoId}`);
+  return paid;
+}
+
+async function fetchTranscriptPaid(videoId: string, apiKey: string): Promise<string | null> {
   const RETRYABLE = new Set([408, 429, 503]);
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -236,8 +294,8 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
       const title = oembed.title ?? originalTitle;
       const creatorName = oembed.author ?? creator;
 
-      const { anthropic, transcriptKey, geminiKey } = await getClients();
-      const transcript = await fetchTranscript(videoId, transcriptKey);
+      const { anthropic, transcriptKey, geminiKey, captionToken } = await getClients();
+      const transcript = await fetchTranscript(videoId, transcriptKey, captionToken);
 
       const system = transcript ? systemWithTranscript(today) : systemTitleOnly();
       const userMsg = transcript

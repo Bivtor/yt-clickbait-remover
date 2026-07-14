@@ -12,6 +12,8 @@ transcript-cache/
 notes/
 claude/
 styles/
+vps/
+src/worker/vps-ca.ts
 
 # local test images (proxy-cost / frame-vote experiments)
 tools/ab_frames/

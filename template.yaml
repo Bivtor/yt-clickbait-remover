@@ -325,6 +325,8 @@ Resources:
             ParameterName: de-clickbait/anthropic-api-key
         - SSMParameterReadPolicy:
             ParameterName: de-clickbait/gemini-api-key
+        - SSMParameterReadPolicy:
+            ParameterName: de-clickbait/caption-service-token
       Environment:
         Variables:
           # Parameter NAMES only — the worker fetches the SecureString values at runtime,
@@ -332,6 +334,11 @@ Resources:
           TRANSCRIPT_API_KEY_PARAM: /de-clickbait/transcript-api-key
           ANTHROPIC_API_KEY_PARAM: /de-clickbait/anthropic-api-key
           GEMINI_API_KEY_PARAM: /de-clickbait/gemini-api-key
+          # VPS caption service (Model B lane) — captions come from the flat-cost box
+          # first; transcriptapi.com stays as the paid fallback. Endpoint is pinned to
+          # the self-signed cert in src/worker/vps-ca.ts, hence the bare IP is fine.
+          CAPTION_SERVICE_URL: https://94.130.227.12:8443
+          CAPTION_SERVICE_TOKEN_PARAM: /de-clickbait/caption-service-token
       Events:
         SQSTrigger:
           Type: SQS
