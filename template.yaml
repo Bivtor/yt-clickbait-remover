@@ -300,9 +300,9 @@ Resources:
           - "@aws-sdk/*"   # provided by the Lambda runtime — keeps bundle tiny
 
   # ── Worker Lambda ─────────────────────────────────────────────────────────────
-  # Triggered by SQS. Fetches transcript via Supadata, rewrites with Haiku,
-  # writes the result to DynamoDB. BatchSize: 1 keeps things simple and
-  # avoids one slow video blocking others in the same batch.
+  # Triggered by SQS. Fetches transcript, rewrites with Gemini Flash-Lite
+  # (Haiku fallback on error/safety-empty), writes the result to DynamoDB.
+  # BatchSize: 1 keeps things simple and avoids one slow video blocking others.
   WorkerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -323,12 +323,15 @@ Resources:
             ParameterName: de-clickbait/transcript-api-key
         - SSMParameterReadPolicy:
             ParameterName: de-clickbait/anthropic-api-key
+        - SSMParameterReadPolicy:
+            ParameterName: de-clickbait/gemini-api-key
       Environment:
         Variables:
           # Parameter NAMES only — the worker fetches the SecureString values at runtime,
           # so the keys never appear in the Lambda console / GetFunctionConfiguration.
           TRANSCRIPT_API_KEY_PARAM: /de-clickbait/transcript-api-key
           ANTHROPIC_API_KEY_PARAM: /de-clickbait/anthropic-api-key
+          GEMINI_API_KEY_PARAM: /de-clickbait/gemini-api-key
       Events:
         SQSTrigger:
           Type: SQS
