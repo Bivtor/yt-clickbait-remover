@@ -38,17 +38,21 @@ function getClients() {
 const systemTitleOnly = () => `\
 You de-clickbait YouTube titles. You have ONLY the original title and the channel name — no information about what the video actually contains.
 Rewrite it to be calmer and less sensational while preserving its apparent meaning.
-Rules: remove ALL-CAPS, curiosity gaps, emoji, and hype words; keep proper nouns and channel name if relevant; aim for ~6-8 words.
+Rules: remove ALL-CAPS, curiosity gaps, emoji, and hype words; keep proper nouns and channel name if relevant; aim for ~6-8 words; write in the same language as the original title.
+An opinion or joke framing that makes no factual promise is not clickbait by itself; keep its meaning and only strip hype formatting.
 If the title is already plain, accurate, and contains no clickbait, return it in Title Case without changing any words.
 Output ONLY the rewritten title, nothing else.`;
 
 const systemWithTranscript = (today: string) => `\
 You de-clickbait YouTube titles. You have the original title, the channel name, and a transcript excerpt of what the video actually contains.
-Today's date: ${today}. Rewrite the title to state plainly and accurately what the video really delivers, based on the transcript.
-Rules: remove hype, curiosity gaps, ALL-CAPS, emoji, and any promise the content doesn't keep; prefer concrete specifics from the transcript; keep proper nouns; aim for ~6–8 words.
+Today's date: ${today}. First, silently classify the video from the transcript, then rewrite the title:
+- INFORMATIONAL (tutorial, explainer, news, review, podcast, essay): state plainly and accurately what the video really delivers; prefer concrete specifics from the transcript.
+- WORK OR MOMENT TO EXPERIENCE (movie/TV scene, trailer or teaser, music, standup, speech or reading, meme — the transcript is dialogue, lyrics, or performance rather than someone informing the viewer): do NOT summarize the content into a literal description; never summarize lyrics, jokes, or plot. Identify it instead: name the source work, artist, or speaker, plus a short neutral label (scene, official trailer, standup clip). You may use your own knowledge to name the source only if you confidently recognize it; never guess. If satire or parody, the title must stay recognizable as satire. If the source is unidentifiable, keep the original title's meaning and only strip the hype.
+Rules for both: remove hype, curiosity gaps, ALL-CAPS, emoji, and any factual promise the content doesn't keep; keep proper nouns; aim for ~6–8 words; write in the same language as the original title.
+An opinion or joke framing (like "worst line in movie history") that makes no factual promise is not clickbait by itself; keep the framing and only remove hype formatting.
 If you include a year in the title, use ${today.slice(0, 4)} unless the transcript explicitly refers to a past event.
 If the original title is already plain, accurate, and contains no clickbait, return it in Title Case without changing any words.
-Output ONLY the rewritten title, nothing else.`;
+Never mention or explain your classification. Output ONLY the rewritten title: a single line, no explanation, no markdown, no quotes.`;
 
 // ── oEmbed: authoritative title + existence check ───────────────────────────────
 // The resolver can't verify client-supplied titles (any anonymous caller can POST a
@@ -115,10 +119,14 @@ async function fetchTranscript(videoId: string, apiKey: string): Promise<string 
       const parsed = JSON.parse(raw) as any;
       text = Array.isArray(parsed)
         ? parsed.map((s: any) => s.text ?? "").join(" ")
-        : (parsed.text ?? parsed.content ?? raw);
+        : (parsed.transcript ?? parsed.text ?? parsed.content ?? raw);
     } catch {
       text = raw;
     }
+
+    // transcriptapi's "text" format still carries [Ns] timestamps — strip them so
+    // they don't eat into the word budget or add noise the model has to see past.
+    text = text.replace(/\[\d+(?:\.\d+)?s\]/g, " ");
 
     if (!text.trim()) return null;
     return text.split(/\s+/).slice(0, 3000).join(" ");
@@ -164,10 +172,17 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         messages: [{ role: "user", content: userMsg }],
       });
 
-      const rewrittenTitle =
-        response.content[0]?.type === "text"
-          ? response.content[0].text.trim()
-          : title;
+      // The cache is permanent, so a malformed response (leaked reasoning, markdown,
+      // multi-line) must never be stored as a title: keep the last non-empty line,
+      // strip wrapping */" chars, and fall back to the original title if it still
+      // doesn't look like one.
+      let rewrittenTitle = title;
+      if (response.content[0]?.type === "text") {
+        const lines = response.content[0].text.trim().split("\n").map(l => l.trim()).filter(Boolean);
+        const candidate = (lines[lines.length - 1] ?? "")
+          .replace(/^[*"'`]+|[*"'`]+$/g, "").trim();
+        if (candidate && candidate.length <= 120) rewrittenTitle = candidate;
+      }
 
       // UpdateItem (not PutItem) so we only touch the title attributes — the
       // thumbnail worker writes thumbUrl on the same item and PutItem would
