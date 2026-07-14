@@ -28,3 +28,5 @@ dist/
 __pycache__/
 *.pyc
 localworker/
+tools/llm_headtohead.mjs
+tools/regression-ids.txt

@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.0",
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/client-ssm": "^3.1079.0"
   },
